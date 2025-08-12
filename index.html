@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Emotion Detection Demo</title>
+  <title>Emotion Detection Demo + Micro-Spikes</title>
 
   <!-- face-api.js -->
   <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
@@ -14,28 +14,57 @@
     #container { position:relative; width:100%; max-width:420px; }
     video { width:100%; border-radius:12px; background:#000; display:block; }
     canvas { position:absolute; top:0; left:0; pointer-events:none; }
-    #status { margin-top:12px; opacity:.9; }
+    #hud { width:100%; max-width:420px; display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:10px; }
+    #status { opacity:.95; }
+    #fps { opacity:.7; }
     .error { color:#ff8a8a; }
-    button { margin-top:12px; padding:10px 14px; border:0; border-radius:10px; background:#2a2a2a; color:#fff; }
+    .chip {
+      position:absolute; left:50%; top:12px; transform:translateX(-50%);
+      background:rgba(255,255,255,.12); padding:6px 12px; border-radius:999px;
+      font-weight:600; backdrop-filter: blur(6px); box-shadow:0 6px 18px rgba(0,0,0,.2);
+    }
+    .chip.micro { top:46px; background:rgba(255,214,10,.18); }
+    .row { margin-top:10px; display:flex; gap:8px; align-items:center; }
+    button { padding:8px 12px; border:0; border-radius:10px; background:#2a2a2a; color:#fff; }
   </style>
 </head>
 <body>
   <div id="container">
     <video id="video" autoplay muted playsinline></video>
-    <!-- canvas injected later -->
+    <!-- overlay canvas injected -->
+    <div id="chipMain" class="chip">🙂 Neutral</div>
+    <div id="chipMicro" class="chip micro" style="display:none;">⚡ Micro-…</div>
   </div>
-  <div id="status">Loading models…</div>
-  <button id="retry" style="display:none;">Retry</button>
+
+  <div id="hud">
+    <div id="status">Loading models…</div>
+    <div id="fps"></div>
+  </div>
+
+  <div class="row">
+    <button id="togglePerf">Performance: High</button>
+    <button id="resetMicro">Reset Micro Detector</button>
+  </div>
 
   <script>
-    const statusEl = document.getElementById('status');
-    const retryBtn = document.getElementById('retry');
+    const MODEL_URL = './models';
     const video = document.getElementById('video');
     const container = document.getElementById('container');
-    const MODEL_URL = './models';
+    const statusEl = document.getElementById('status');
+    const fpsEl = document.getElementById('fps');
+    const chipMain = document.getElementById('chipMain');
+    const chipMicro = document.getElementById('chipMicro');
+    const togglePerfBtn = document.getElementById('togglePerf');
+    const resetBtn = document.getElementById('resetMicro');
 
-    // Error surfacing
-    function showErr(msg){ statusEl.classList.add('error'); statusEl.textContent = msg; retryBtn.style.display='inline-block'; }
+    let highPerf = true; // larger detector input + higher FPS request
+
+    const EMOJI = {
+      neutral: '😐', happy: '😃', sad: '😢',
+      angry: '😠', fearful: '😨', disgusted: '🤢', surprised: '😮'
+    };
+
+    function showErr(msg){ statusEl.classList.add('error'); statusEl.textContent = msg; }
     window.addEventListener('error', e => showErr('Error: ' + e.message));
     window.addEventListener('unhandledrejection', e => showErr('Promise error: ' + (e.reason?.message || e.reason)));
 
@@ -47,66 +76,138 @@
     }
 
     async function startCamera(){
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode:'user' }, audio:false });
+      const constraints = {
+        video: {
+          facingMode: 'user',
+          width: { ideal: 1280 }, height: { ideal: 720 },
+          frameRate: highPerf ? { ideal: 60, max: 120 } : { ideal: 30, max: 30 }
+        },
+        audio: false
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       video.srcObject = stream;
-
-      // Wait until the video has metadata (dimensions) and can play
-      await new Promise(resolve => {
-        if (video.readyState >= 2) return resolve();               // HAVE_CURRENT_DATA
-        video.onloadedmetadata = () => resolve();
-      });
-
-      // On iOS/Safari sometimes play() is required even if autoplay+muted are set
+      await new Promise(res => { if (video.readyState >= 2) res(); else video.onloadedmetadata = () => res(); });
       try { await video.play(); } catch(_) {}
-
       statusEl.textContent = 'Camera started.';
     }
 
     function prepareCanvas(){
-      // Create canvas after video has width/height
       const canvas = document.createElement('canvas');
-      canvas.width  = video.videoWidth || 640;
-      canvas.height = video.videoHeight || 480;
+      const sync = () => { const w = video.videoWidth||640, h = video.videoHeight||480; canvas.width=w; canvas.height=h; };
+      sync();
       container.appendChild(canvas);
-
-      // Keep canvas in sync if dimensions change
-      function syncSize(){
-        const w = video.videoWidth, h = video.videoHeight;
-        if (w && h && (canvas.width !== w || canvas.height !== h)){
-          canvas.width = w; canvas.height = h;
-        }
-      }
-      video.addEventListener('loadeddata', syncSize);
-      video.addEventListener('resize', syncSize);
-
+      video.addEventListener('loadeddata', sync);
+      video.addEventListener('resize', sync);
       return canvas;
     }
 
+    // ----- Micro-spike detector (heuristic) -----
+    // We keep short rolling windows of probabilities per emotion.
+    // If current prob jumps > delta above baseline for a short duration, flag a micro-event.
+    const EMOTIONS = ['neutral','happy','sad','angry','fearful','disgusted','surprised'];
+    const histLen = 18;       // ~300ms @60fps
+    const minFrames = 3;      // need at least this many samples before judging
+    const spikeDelta = 0.22;  // how big the jump above baseline (tune 0.18–0.30)
+    const spikeMaxMs = 500;   // must subside within this to count as "micro"
+    const buffers = Object.fromEntries(EMOTIONS.map(e => [e, []]));
+    let lastSpike = { emotion:null, t:0 };
+
+    function resetMicro(){
+      EMOTIONS.forEach(e => buffers[e] = []);
+      lastSpike = { emotion:null, t:0 };
+      chipMicro.style.display='none';
+    }
+
+    function updateBuffers(exps){
+      const now = performance.now();
+      for (const e of EMOTIONS){
+        buffers[e].push({ t: now, p: exps[e] ?? 0 });
+        if (buffers[e].length > histLen) buffers[e].shift();
+      }
+    }
+
+    function baselineProb(e){
+      const b = buffers[e];
+      if (b.length < minFrames) return 0;
+      // median of recent probs as baseline (more robust than mean)
+      const arr = b.map(x=>x.p).slice().sort((a,b)=>a-b);
+      const mid = Math.floor(arr.length/2);
+      return arr.length%2 ? arr[mid] : (arr[mid-1]+arr[mid])/2;
+    }
+
+    function detectMicroSpike(exps){
+      const now = performance.now();
+      for (const e of EMOTIONS){
+        const base = baselineProb(e);
+        const cur = exps[e] ?? 0;
+        // spike if current is well above baseline and not a long sustained change
+        if (cur - base >= spikeDelta){
+          // ensure it’s transient: recent values should drop back within spikeMaxMs
+          const b = buffers[e];
+          if (b.length >= minFrames){
+            const firstT = b[0].t;
+            if (now - firstT <= spikeMaxMs){
+              // avoid spamming: don't re-flag same emotion continuously
+              if (lastSpike.emotion !== e || (now - lastSpike.t) > 900){
+                lastSpike = { emotion:e, t:now };
+                return e;
+              }
+            }
+          }
+        }
+      }
+      return null;
+    }
+
+    // ----- Main detection loop -----
     function startDetection(canvas){
       const ctx = canvas.getContext('2d');
-      const opts = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 });
+      const opts = () => new faceapi.TinyFaceDetectorOptions({ inputSize: highPerf ? 320 : 224, scoreThreshold: 0.4 });
+
+      let frames = 0, mark = performance.now();
 
       async function loop(){
         try{
-          const w = video.videoWidth, h = video.videoHeight;
-          if (w && h){
-            const det = await faceapi.detectSingleFace(video, opts).withFaceExpressions();
-            ctx.clearRect(0,0,canvas.width,canvas.height);
+          const det = await faceapi.detectSingleFace(video, opts()).withFaceExpressions();
+          ctx.clearRect(0,0,canvas.width,canvas.height);
 
-            if (det){
-              const resized = faceapi.resizeResults(det, { width: canvas.width, height: canvas.height });
-              faceapi.draw.drawDetections(canvas, resized);
-              faceapi.draw.drawFaceExpressions(canvas, resized);
+          if (det){
+            const resized = faceapi.resizeResults(det, { width: canvas.width, height: canvas.height });
+            faceapi.draw.drawDetections(canvas, resized);
+            faceapi.draw.drawFaceExpressions(canvas, resized);
 
-              const exps = det.expressions;
-              const top = Object.keys(exps).reduce((a,b)=> exps[a] > exps[b] ? a : b);
-              statusEl.textContent = `Emotion: ${top} (${(exps[top]*100|0)}%)`;
-              statusEl.classList.remove('error');
-            } else {
-              statusEl.textContent = 'No face detected';
+            const exps = det.expressions;
+            // update buffers first
+            updateBuffers(exps);
+
+            // dominant emotion (for main chip)
+            const top = Object.keys(exps).reduce((a,b)=> exps[a] > exps[b] ? a : b);
+            chipMain.textContent = `${EMOJI[top] || '🙂'} ${top[0].toUpperCase()+top.slice(1)}`;
+
+            // micro-spike detection
+            const micro = detectMicroSpike(exps);
+            if (micro){
+              chipMicro.textContent = `⚡ Micro-${micro}`;
+              chipMicro.style.display = 'block';
+              // auto-hide after 800ms
+              const seenAt = performance.now();
+              setTimeout(() => {
+                if (performance.now() - seenAt >= 780) chipMicro.style.display='none';
+              }, 800);
             }
+            statusEl.textContent = 'Tracking…';
+            statusEl.classList.remove('error');
+          } else {
+            statusEl.textContent = 'No face detected';
+            chipMain.textContent = '🙂 Neutral';
+            // slowly decay buffers so old spikes don’t linger
+            EMOTIONS.forEach(e => { if (buffers[e].length) buffers[e].shift(); });
           }
-        } catch(err){
+
+          // FPS display
+          frames++; const now = performance.now();
+          if (now - mark > 1000){ fpsEl.textContent = frames + ' fps'; frames=0; mark=now; }
+        }catch(err){
           showErr('Detection error: ' + err.message);
         }
         requestAnimationFrame(loop);
@@ -115,20 +216,27 @@
     }
 
     async function init(){
-      retryBtn.style.display='none'; statusEl.classList.remove('error');
+      try{
+        await faceapi.tf.setBackend('webgl'); // ensure GPU path
+      }catch(_){} // ignore if not available
       try{
         await loadModels();
-        await startCamera();                // <-- wait for camera to be ready
-        const canvas = prepareCanvas();     // <-- create canvas AFTER video ready
+        await startCamera();
+        const canvas = prepareCanvas();
         startDetection(canvas);
       }catch(err){
         showErr('Init error: ' + err.message);
       }
     }
 
-    retryBtn.addEventListener('click', init);
+    document.getElementById('togglePerf').addEventListener('click', () => {
+      highPerf = !highPerf;
+      togglePerfBtn.textContent = 'Performance: ' + (highPerf ? 'High' : 'Normal');
+      location.reload(); // simplest way to reapply constraints
+    });
+    document.getElementById('resetMicro').addEventListener('click', resetMicro);
+
     init();
   </script>
 </body>
 </html>
-
