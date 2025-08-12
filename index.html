@@ -10,19 +10,56 @@
 
   <style>
     :root { color-scheme: dark; }
-    body { margin:0; display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:100vh; background:#111; color:#fff; font-family:system-ui, -apple-system, Arial; }
-    #container { position:relative; width:100%; max-width:420px; }
-    video { width:100%; border-radius:12px; display:block; background:#000; }
-    canvas { position:absolute; top:0; left:0; pointer-events:none; }
-    #status { margin-top:12px; font-size:15px; opacity:.9; }
-    button { margin-top:12px; padding:10px 14px; border:0; border-radius:10px; background:#2a2a2a; color:#fff; }
-    .error { color:#ff8a8a; }
+    body {
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      background: #111;
+      color: #fff;
+      font-family: system-ui, -apple-system, Arial;
+    }
+    #container {
+      position: relative;
+      width: 100%;
+      max-width: 420px;
+    }
+    video {
+      width: 100%;
+      border-radius: 12px;
+      display: block;
+      background: #000;
+    }
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      pointer-events: none;
+    }
+    #status {
+      margin-top: 12px;
+      font-size: 15px;
+      opacity: .9;
+    }
+    .error {
+      color: #ff8a8a;
+    }
+    button {
+      margin-top: 12px;
+      padding: 10px 14px;
+      border: 0;
+      border-radius: 10px;
+      background: #2a2a2a;
+      color: #fff;
+    }
   </style>
 </head>
 <body>
   <div id="container">
     <video id="video" autoplay muted playsinline></video>
-    <!-- canvas will be injected -->
+    <!-- Canvas will be added by JS -->
   </div>
   <div id="status">Loading models…</div>
   <button id="retry" style="display:none;">Retry</button>
@@ -32,71 +69,85 @@
     const retryBtn = document.getElementById('retry');
     const video = document.getElementById('video');
     const container = document.getElementById('container');
-    const MODEL_URL = './models'; // <-- uses your repo’s models folder
+    const MODEL_URL = './models'; // Path to your models folder
 
-    // Helper to show errors on screen
-    function showError(msg) {
+    // Show any page errors
+    window.addEventListener('error', e => {
       statusEl.classList.add('error');
-      statusEl.textContent = msg;
+      statusEl.textContent = 'Error: ' + e.message;
       retryBtn.style.display = 'inline-block';
-    }
-
-    window.addEventListener('error', e => showError('Page error: ' + e.message));
-    window.addEventListener('unhandledrejection', e => showError('Promise error: ' + (e.reason && e.reason.message || e.reason)));
+    });
+    window.addEventListener('unhandledrejection', e => {
+      statusEl.classList.add('error');
+      statusEl.textContent = 'Promise error: ' + (e.reason && e.reason.message || e.reason);
+      retryBtn.style.display = 'inline-block';
+    });
 
     async function loadModels() {
-      try {
-        statusEl.textContent = 'Loading models…';
-        await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-        await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
-        statusEl.textContent = 'Starting camera…';
-      } catch (err) {
-        showError('Model load failed. Check /models files. ' + err);
-        throw err;
-      }
+      console.log("Loading models from", MODEL_URL);
+      statusEl.textContent = 'Loading models…';
+      await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+      await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
+      statusEl.textContent = 'Models loaded. Starting camera…';
     }
 
     async function startCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
-        video.srcObject = stream;
-        statusEl.textContent = 'Camera started.';
-      } catch (err) {
-        showError('Camera error: ' + err.message);
-        throw err;
-      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user' },
+        audio: false
+      });
+      video.srcObject = stream;
+      statusEl.textContent = 'Camera started.';
     }
 
     function startDetection() {
       const canvas = faceapi.createCanvasFromMedia(video);
-      canvas.style.top = '0';
-      canvas.style.left = '0';
       container.appendChild(canvas);
 
-      const setSize = () => {
-        const w = video.videoWidth || video.clientWidth;
-        const h = video.videoHeight || video.clientHeight;
-        canvas.width = w; canvas.height = h;
-        faceapi.matchDimensions(canvas, { width: w, height: h });
-      };
-      video.addEventListener('loadedmetadata', setSize);
-      video.addEventListener('resize', setSize);
+      const displaySize = { width: video.videoWidth, height: video.videoHeight };
+      faceapi.matchDimensions(canvas, displaySize);
 
       const opts = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 });
 
-      const loop = async () => {
-        try {
-          const w = video.videoWidth, h = video.videoHeight;
-          if (!w || !h) return requestAnimationFrame(loop);
+      setInterval(async () => {
+        const detection = await faceapi
+          .detectSingleFace(video, opts)
+          .withFaceExpressions();
 
-          const det = await faceapi.detectSingleFace(video, opts).withFaceExpressions();
-          const ctx = canvas.getContext('2d');
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-          if (det && det.expressions) {
-            const resized = faceapi.resizeResults(det, { width: canvas.width, height: canvas.height });
-            faceapi.draw.drawDetections(canvas, resized);
-            faceapi.draw.drawFaceExpressions(canvas, resized);
+        if (detection) {
+          const resized = faceapi.resizeResults(detection, displaySize);
+          faceapi.draw.drawDetections(canvas, resized);
+          faceapi.draw.drawFaceExpressions(canvas, resized);
 
-            const exps = det.expressions;
-            cons
+          const exps = detection.expressions;
+          const top = Object.keys(exps).reduce((a, b) => exps[a] > exps[b] ? a : b);
+          statusEl.textContent = `Emotion: ${top} (${(exps[top] * 100 | 0)}%)`;
+          statusEl.classList.remove('error');
+        } else {
+          statusEl.textContent = 'No face detected';
+        }
+      }, 500);
+    }
+
+    async function init() {
+      retryBtn.style.display = 'none';
+      statusEl.classList.remove('error');
+      try {
+        await loadModels();
+        await startCamera();
+        startDetection();
+      } catch (err) {
+        statusEl.classList.add('error');
+        statusEl.textContent = 'Init error: ' + err.message;
+        retryBtn.style.display = 'inline-block';
+      }
+    }
+
+    retryBtn.addEventListener('click', init);
+    init();
+  </script>
+</body>
+</html>
