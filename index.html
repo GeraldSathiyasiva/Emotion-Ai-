@@ -5,61 +5,24 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Emotion Detection Demo</title>
 
-  <!-- face-api.js library -->
+  <!-- face-api.js -->
   <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 
   <style>
     :root { color-scheme: dark; }
-    body {
-      margin: 0;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-      background: #111;
-      color: #fff;
-      font-family: system-ui, -apple-system, Arial;
-    }
-    #container {
-      position: relative;
-      width: 100%;
-      max-width: 420px;
-    }
-    video {
-      width: 100%;
-      border-radius: 12px;
-      display: block;
-      background: #000;
-    }
-    canvas {
-      position: absolute;
-      top: 0;
-      left: 0;
-      pointer-events: none;
-    }
-    #status {
-      margin-top: 12px;
-      font-size: 15px;
-      opacity: .9;
-    }
-    .error {
-      color: #ff8a8a;
-    }
-    button {
-      margin-top: 12px;
-      padding: 10px 14px;
-      border: 0;
-      border-radius: 10px;
-      background: #2a2a2a;
-      color: #fff;
-    }
+    body { margin:0; min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; background:#111; color:#fff; font-family:system-ui,-apple-system,Arial; }
+    #container { position:relative; width:100%; max-width:420px; }
+    video { width:100%; border-radius:12px; background:#000; display:block; }
+    canvas { position:absolute; top:0; left:0; pointer-events:none; }
+    #status { margin-top:12px; opacity:.9; }
+    .error { color:#ff8a8a; }
+    button { margin-top:12px; padding:10px 14px; border:0; border-radius:10px; background:#2a2a2a; color:#fff; }
   </style>
 </head>
 <body>
   <div id="container">
     <video id="video" autoplay muted playsinline></video>
-    <!-- Canvas will be added by JS -->
+    <!-- canvas injected later -->
   </div>
   <div id="status">Loading models…</div>
   <button id="retry" style="display:none;">Retry</button>
@@ -69,80 +32,97 @@
     const retryBtn = document.getElementById('retry');
     const video = document.getElementById('video');
     const container = document.getElementById('container');
-    const MODEL_URL = './models'; // Path to your models folder
+    const MODEL_URL = './models';
 
-    // Show any page errors
-    window.addEventListener('error', e => {
-      statusEl.classList.add('error');
-      statusEl.textContent = 'Error: ' + e.message;
-      retryBtn.style.display = 'inline-block';
-    });
-    window.addEventListener('unhandledrejection', e => {
-      statusEl.classList.add('error');
-      statusEl.textContent = 'Promise error: ' + (e.reason && e.reason.message || e.reason);
-      retryBtn.style.display = 'inline-block';
-    });
+    // Error surfacing
+    function showErr(msg){ statusEl.classList.add('error'); statusEl.textContent = msg; retryBtn.style.display='inline-block'; }
+    window.addEventListener('error', e => showErr('Error: ' + e.message));
+    window.addEventListener('unhandledrejection', e => showErr('Promise error: ' + (e.reason?.message || e.reason)));
 
-    async function loadModels() {
-      console.log("Loading models from", MODEL_URL);
+    async function loadModels(){
       statusEl.textContent = 'Loading models…';
       await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
       await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
       statusEl.textContent = 'Models loaded. Starting camera…';
     }
 
-    async function startCamera() {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user' },
-        audio: false
-      });
+    async function startCamera(){
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode:'user' }, audio:false });
       video.srcObject = stream;
+
+      // Wait until the video has metadata (dimensions) and can play
+      await new Promise(resolve => {
+        if (video.readyState >= 2) return resolve();               // HAVE_CURRENT_DATA
+        video.onloadedmetadata = () => resolve();
+      });
+
+      // On iOS/Safari sometimes play() is required even if autoplay+muted are set
+      try { await video.play(); } catch(_) {}
+
       statusEl.textContent = 'Camera started.';
     }
 
-    function startDetection() {
-      const canvas = faceapi.createCanvasFromMedia(video);
+    function prepareCanvas(){
+      // Create canvas after video has width/height
+      const canvas = document.createElement('canvas');
+      canvas.width  = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
       container.appendChild(canvas);
 
-      const displaySize = { width: video.videoWidth, height: video.videoHeight };
-      faceapi.matchDimensions(canvas, displaySize);
-
-      const opts = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 });
-
-      setInterval(async () => {
-        const detection = await faceapi
-          .detectSingleFace(video, opts)
-          .withFaceExpressions();
-
-        const ctx = canvas.getContext('2d');
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        if (detection) {
-          const resized = faceapi.resizeResults(detection, displaySize);
-          faceapi.draw.drawDetections(canvas, resized);
-          faceapi.draw.drawFaceExpressions(canvas, resized);
-
-          const exps = detection.expressions;
-          const top = Object.keys(exps).reduce((a, b) => exps[a] > exps[b] ? a : b);
-          statusEl.textContent = `Emotion: ${top} (${(exps[top] * 100 | 0)}%)`;
-          statusEl.classList.remove('error');
-        } else {
-          statusEl.textContent = 'No face detected';
+      // Keep canvas in sync if dimensions change
+      function syncSize(){
+        const w = video.videoWidth, h = video.videoHeight;
+        if (w && h && (canvas.width !== w || canvas.height !== h)){
+          canvas.width = w; canvas.height = h;
         }
-      }, 500);
+      }
+      video.addEventListener('loadeddata', syncSize);
+      video.addEventListener('resize', syncSize);
+
+      return canvas;
     }
 
-    async function init() {
-      retryBtn.style.display = 'none';
-      statusEl.classList.remove('error');
-      try {
+    function startDetection(canvas){
+      const ctx = canvas.getContext('2d');
+      const opts = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 });
+
+      async function loop(){
+        try{
+          const w = video.videoWidth, h = video.videoHeight;
+          if (w && h){
+            const det = await faceapi.detectSingleFace(video, opts).withFaceExpressions();
+            ctx.clearRect(0,0,canvas.width,canvas.height);
+
+            if (det){
+              const resized = faceapi.resizeResults(det, { width: canvas.width, height: canvas.height });
+              faceapi.draw.drawDetections(canvas, resized);
+              faceapi.draw.drawFaceExpressions(canvas, resized);
+
+              const exps = det.expressions;
+              const top = Object.keys(exps).reduce((a,b)=> exps[a] > exps[b] ? a : b);
+              statusEl.textContent = `Emotion: ${top} (${(exps[top]*100|0)}%)`;
+              statusEl.classList.remove('error');
+            } else {
+              statusEl.textContent = 'No face detected';
+            }
+          }
+        } catch(err){
+          showErr('Detection error: ' + err.message);
+        }
+        requestAnimationFrame(loop);
+      }
+      requestAnimationFrame(loop);
+    }
+
+    async function init(){
+      retryBtn.style.display='none'; statusEl.classList.remove('error');
+      try{
         await loadModels();
-        await startCamera();
-        startDetection();
-      } catch (err) {
-        statusEl.classList.add('error');
-        statusEl.textContent = 'Init error: ' + err.message;
-        retryBtn.style.display = 'inline-block';
+        await startCamera();                // <-- wait for camera to be ready
+        const canvas = prepareCanvas();     // <-- create canvas AFTER video ready
+        startDetection(canvas);
+      }catch(err){
+        showErr('Init error: ' + err.message);
       }
     }
 
@@ -151,3 +131,4 @@
   </script>
 </body>
 </html>
+
