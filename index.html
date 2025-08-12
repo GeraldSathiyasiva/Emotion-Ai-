@@ -4,10 +4,6 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>MediaPipe Blendshape Emotions (Web)</title>
-
-  <!-- MediaPipe Tasks Vision bundle (Web) -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.js" crossorigin="anonymous"></script>
-
   <style>
     :root { color-scheme: dark; }
     body { margin:0; min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; background:#0f1115; color:#fff; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; }
@@ -26,7 +22,6 @@
     #chipSubtle { top:44px; display:none; background:rgba(88,170,255,.18); }
     .row { margin-top:10px; display:flex; gap:8px; align-items:center; }
     button { padding:8px 12px; border:0; border-radius:10px; background:#2a2a2a; color:#fff; cursor:pointer; }
-    a { color:#9ad; text-decoration:none; }
   </style>
 </head>
 <body>
@@ -47,12 +42,15 @@
     <button id="perf">Performance: High</button>
   </div>
 
-  <script>
+  <!-- Use ES module import so FilesetResolver/FaceLandmarker are defined -->
+  <script type="module">
+    import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.11";
+
     // ======= CONFIG =======
     const MODEL_ASSET_URL =
-      "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task"; // official model bundle
+      "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"; // pinned model
     const WASM_ROOT =
-      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"; // wasm helpers
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.11/wasm"; // match version
 
     let highPerf = true;
 
@@ -72,7 +70,7 @@
     const btnRecal = document.getElementById('recal');
     const btnPerf = document.getElementById('perf');
 
-    const base = { // calibration baselines (from blendshapes)
+    const base = {
       browInnerUp:0, browDown:0, outerBrowUp:0,
       eyesOpen:0, squint:0,
       smile:0, frown:0, lipPress:0, lipCornerDown:0,
@@ -86,8 +84,8 @@
     let faceLandmarker; let lastVideoTime = -1;
 
     async function initMediapipe(){
-      const vision = await window.FilesetResolver.forVisionTasks(WASM_ROOT); // wasm/webgpu files
-      faceLandmarker = await window.FaceLandmarker.createFromOptions(vision, {
+      const vision = await FilesetResolver.forVisionTasks(WASM_ROOT);
+      faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
         baseOptions: { modelAssetPath: MODEL_ASSET_URL },
         runningMode: "VIDEO",
         numFaces: 1,
@@ -117,46 +115,37 @@
     window.addEventListener('resize', resizeCanvas);
     video.addEventListener('loadeddata', resizeCanvas);
 
-    // ======= Helpers: read blendshapes by name =======
+    // ======= Helpers =======
     function toMap(blendshapes){
       const m = {};
       if (!blendshapes?.categories) return m;
       for (const c of blendshapes.categories) m[c.categoryName] = c.score;
       return m;
     }
-
-    // Pick a few robust cues (averaging left/right)
     function cuesFromBlend(m){
-      // Brows
       const browInnerUp = m["browInnerUp"]||0;
       const browOuterUp = ((m["browOuterUpLeft"]||0)+(m["browOuterUpRight"]||0))/2;
       const browDown    = ((m["browDownLeft"]||0)+(m["browDownRight"]||0))/2;
 
-      // Eyes
       const eyesWide    = ((m["eyeWideLeft"]||0)+(m["eyeWideRight"]||0))/2;
       const eyeSquint   = ((m["eyeSquintLeft"]||0)+(m["eyeSquintRight"]||0))/2;
       const eyeBlink    = ((m["eyeBlinkLeft"]||0)+(m["eyeBlinkRight"]||0))/2;
 
-      // Mouth
       const smile       = ((m["mouthSmileLeft"]||0)+(m["mouthSmileRight"]||0))/2;
       const frown       = ((m["mouthFrownLeft"]||0)+(m["mouthFrownRight"]||0))/2;
-      const lipPress    = m["mouthPressLeft"]||0 + m["mouthPressRight"]||0;
-      const lipCornerDown = frown; // alias
+      const lipPress    = (m["mouthPressLeft"]||0) + (m["mouthPressRight"]||0);
+      const lipCornerDown = frown;
       const jawOpen     = m["jawOpen"]||0;
       const cheekRaise  = ((m["cheekPuff"]||0)+(m["cheekSquintLeft"]||0)+(m["cheekSquintRight"]||0))/3;
 
-      // Eyes “open” proxy: wide – blink + (1 - squint)
       const eyesOpen = Math.max(0, eyesWide - eyeBlink + (1 - eyeSquint) * 0.2);
-
       return { browInnerUp, browOuterUp, browDown, eyesOpen, eyeSquint, smile, frown, lipPress, lipCornerDown, jawOpen, cheekRaise };
     }
 
-    // ======= Calibration (2s neutral) =======
     async function calibrate(){
       statusEl.textContent = 'Calibrating… relax face for 2s';
       const t0 = performance.now();
-      const acc = {};
-      let n = 0;
+      const acc = {}; let n = 0;
 
       while (performance.now() - t0 < 2000){
         const res = faceLandmarker.detectForVideo(video, performance.now());
@@ -177,7 +166,6 @@
       }
     }
 
-    // ======= Fusion label from blendshape deltas =======
     function fusedLabel(c){
       const d = {
         browUp:   (c.browInnerUp + c.browOuterUp) - (base.browInnerUp + base.outerBrowUp),
@@ -194,7 +182,7 @@
 
       const s = {
         Surprised:  2.2*Math.max(0,d.browUp) + 1.8*Math.max(0,d.eyesOpen) + 1.2*Math.max(0,d.jawOpen),
-        Amused:     2.4*Math.max(0,d.smile)  + 1.4*Math.max(0,d.squint*-1) + 0.8*Math.max(0,d.cheek),
+        Amused:     2.4*Math.max(0,d.smile)  + 1.4*Math.max(0,-d.squint) + 0.8*Math.max(0,d.cheek),
         Angry:      1.8*Math.max(0,d.browDown)+1.6*Math.max(0,d.lipPress)+0.8*Math.max(0,d.cornerDown),
         Sad:        1.6*Math.max(0,d.cornerDown),
         Fearful:    1.2*Math.max(0,d.eyesOpen) + 0.6*Math.max(0,d.browUp),
@@ -206,8 +194,6 @@
 
       let best='Neutral', bestVal=0;
       for (const [k,v] of Object.entries(s)) if (v > bestVal){ best=k; bestVal=v; }
-
-      // small deadzone so labels don’t flip constantly
       if (bestVal < 0.18) return 'Neutral';
       return best;
     }
@@ -225,52 +211,50 @@
       return cues;
     }
 
-    // ======= Optional: draw key landmarks (simple) =======
     function drawLandmarks(landmarks){
       ctx.clearRect(0,0,canvas.width,canvas.height);
       if (!landmarks?.length) return;
-      ctx.lineWidth = 2; ctx.strokeStyle = "rgba(0,200,255,.9)";
-      ctx.fillStyle = "rgba(0,200,255,.9)";
+      ctx.lineWidth = 2; ctx.fillStyle = "rgba(0,200,255,.9)";
       for (const p of landmarks[0]) {
-        ctx.beginPath(); ctx.arc(p.x*canvas.width, p.y*canvas.height, 1.6, 0, Math.PI*2); ctx.fill();
+        ctx.beginPath();
+        ctx.arc(p.x*canvas.width, p.y*canvas.height, 1.6, 0, Math.PI*2);
+        ctx.fill();
       }
     }
 
-    // ======= Main loop =======
     async function init(){
       try{
         statusEl.textContent = 'Loading model…';
-        await initMediapipe();                                  // load bundle + model
+        await initMediapipe();
         statusEl.textContent = 'Starting camera…';
         await startCamera();
 
-        // Quick warmup to ensure outputs exist, then calibrate
+        // Warmup + calibration
         faceLandmarker.detectForVideo(video, performance.now());
         await calibrate();
 
         let frames = 0, mark = performance.now();
         function loop(){
           const now = performance.now();
-          if (video.currentTime !== lastVideoTime){
-            const res = faceLandmarker.detectForVideo(video, now);
-            lastVideoTime = video.currentTime;
+          const res = faceLandmarker.detectForVideo(video, now);
 
-            if (res){
-              drawLandmarks(res.faceLandmarks);
-              if (res.faceBlendshapes?.length){
-                const m = toMap(res.faceBlendshapes[0]);
-                const c = cuesFromBlend(m);
-                const label = fusedLabel(c);
-                chipMain.textContent = `${EMOJI[label] || '🙂'} ${label}`;
-                const cues = subtleText(c);
-                if (cues.length){ chipSubtle.style.display='block'; chipSubtle.textContent = 'Subtle: ' + cues.join(', '); }
-                else { chipSubtle.style.display='none'; }
-                statusEl.textContent = 'Tracking…';
-              } else {
-                chipSubtle.style.display='none';
-                statusEl.textContent = 'Face detected (no blendshapes)';
-              }
-            }
+          drawLandmarks(res?.faceLandmarks);
+          if (res?.faceBlendshapes?.length){
+            const m = toMap(res.faceBlendshapes[0]);
+            const c = cuesFromBlend(m);
+            const label = fusedLabel(c);
+            const EMOJI_MAP = {
+              Surprised:'😮', Amused:'😄', Angry:'😠', Sad:'😢', Fearful:'😨',
+              Skeptical:'🤨', Determined:'😤', Concerned:'😟', Relaxed:'🙂', Neutral:'😐'
+            };
+            chipMain.textContent = `${EMOJI_MAP[label] || '🙂'} ${label}`;
+            const cues = subtleText(c);
+            if (cues.length){ chipSubtle.style.display='block'; chipSubtle.textContent = 'Subtle: ' + cues.join(', '); }
+            else { chipSubtle.style.display='none'; }
+            statusEl.textContent = 'Tracking…';
+          } else {
+            chipSubtle.style.display='none';
+            statusEl.textContent = 'Face detected';
           }
 
           // FPS
