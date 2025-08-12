@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Emotion + Subtle Cues (no-download)</title>
+  <title>Emotion + Subtle Cues (fused labels)</title>
 
   <!-- face-api.js -->
   <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
@@ -31,7 +31,7 @@
 <body>
   <div id="container">
     <video id="video" autoplay muted playsinline></video>
-    <!-- overlay -->
+    <!-- overlay chips -->
     <div id="chipMain"   class="chip">🙂 Neutral</div>
     <div id="chipSubtle" class="chip">Subtle: —</div>
   </div>
@@ -47,7 +47,7 @@
   </div>
 
   <script>
-    // Local models (you already have these 4 in /models): tinyFace + expressions
+    // Local models already in your repo (tinyFace + expressions)
     const MODEL_URL = './models';
     // Hosted landmarks (no download needed)
     const MODEL_URL_LM = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js-models/master/face_landmark_68';
@@ -70,7 +70,7 @@
       statusEl.textContent = 'Loading models…';
       await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
       await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
-      await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL_LM); // <-- hosted; no download
+      await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL_LM); // hosted
       statusEl.textContent = 'Models loaded. Starting camera…';
     }
 
@@ -97,41 +97,58 @@
       return canvas;
     }
 
-    // ---------- Subtle cues via landmarks vs baseline ----------
+    // ---------- Landmark utilities ----------
+    const dist = (a,b)=>Math.hypot(a.x-b.x, a.y-b.y);
+    const vdist = (a,b)=>Math.abs(a.y - b.y);
     const avgY = (pts, idxs) => idxs.reduce((s,i)=>s+pts[i].y,0)/idxs.length;
-    const dist  = (a,b)=>Math.hypot(a.x-b.x, a.y-b.y);
 
     const LEFT_EYE   = [36,37,38,39,40,41];
     const RIGHT_EYE  = [42,43,44,45,46,47];
     const LEFT_BROW  = [17,18,19,20,21];
     const RIGHT_BROW = [22,23,24,25,26];
-    const NOSE_L = 31, NOSE_R = 35;
+    const NOSE_L = 31, NOSE_R = 35, NOSE_TOP = 27, CHIN = 8;
     const M_L = 48, M_R = 54, M_TOP = 51, M_BOT = 57;
+    function eyeOuterCrinkle(p){
+      const l = (vdist(p[38], p[40]) + vdist(p[39], p[41])) / 2;
+      const r = (vdist(p[44], p[46]) + vdist(p[45], p[47])) / 2;
+      return (l + r) / 2;
+    }
 
-    const base = { browEyeGap:0, eyeAperture:0, mouthSmile:0, mouthFrown:0 };
+    // Baseline learned during calibration
+    const base = { eyeAperture:0, browEyeGap:0, mouthSmile:0, mouthFrown:0, lipGap:0, outerEyeGap:0 };
     let calibrated = false;
 
     function calcFeatures(landmarks){
       const p = landmarks.positions;
-      const faceH = dist(p[27], p[8]) || 1;
+      const faceH = dist(p[NOSE_TOP], p[CHIN]) || 1;
 
+      // Eye aperture (avg vertical opening)
       const eyeApertureL = (p[38].y - p[40].y);
       const eyeApertureR = (p[44].y - p[46].y);
       const eyeAperture  = ((eyeApertureL + eyeApertureR)/2) / faceH;
 
+      // Brow–eye gap (avg brow to eye-top distance)
       const browY_L = avgY(p, LEFT_BROW), browY_R = avgY(p, RIGHT_BROW);
       const eyeTopY_L = (p[37].y + p[38].y)/2, eyeTopY_R = (p[43].y + p[44].y)/2;
       const browEyeGap = (((eyeTopY_L - browY_L) + (eyeTopY_R - browY_R))/2) / faceH;
 
+      // Smile proxy: mouth width normalized by nose width
       const mouthW = dist(p[M_L], p[M_R]);
       const noseW  = dist(p[NOSE_L], p[NOSE_R]) || 1;
       const mouthSmile = mouthW / noseW;
 
+      // Frown proxy: corners below mouth midline
       const mouthMidY = (p[M_TOP].y + p[M_BOT].y)/2;
       const cornerDrop = ((p[M_L].y - mouthMidY) + (p[M_R].y - mouthMidY))/2;
       const mouthFrown = cornerDrop / faceH;
 
-      return { eyeAperture, browEyeGap, mouthSmile, mouthFrown };
+      // Lip press: upper–lower inner lip gap shrinks
+      const lipGap = vdist(p[62], p[66]) / faceH;
+
+      // Eye crinkle: smaller outer-lid opening near corners
+      const outerEyeGap = eyeOuterCrinkle(p) / faceH;
+
+      return { eyeAperture, browEyeGap, mouthSmile, mouthFrown, lipGap, outerEyeGap };
     }
 
     async function calibrate(detector, ms=2000){
@@ -148,18 +165,58 @@
       base.browEyeGap  = mean('browEyeGap');
       base.mouthSmile  = mean('mouthSmile');
       base.mouthFrown  = mean('mouthFrown');
+      base.lipGap      = mean('lipGap');
+      base.outerEyeGap = mean('outerEyeGap');
       calibrated = true;
       statusEl.textContent = 'Calibrated. Tracking…';
       return true;
     }
 
-    function subtleLabels(feat){
-      const labs = [];
-      if (feat.browEyeGap - base.browEyeGap > 0.015) labs.push('Brow raise');
-      if (feat.eyeAperture  - base.eyeAperture  > 0.012) labs.push('Eye widen');
-      if (feat.mouthSmile   - base.mouthSmile   > 0.08)  labs.push('Corner pull');
-      if (feat.mouthFrown   - base.mouthFrown   > 0.010) labs.push('Corner down');
-      return labs;
+    // Fusion: expressions + subtle feature deltas → final label
+    function labelEmotion(exps, feat){
+      const d = {
+        browUp:   (feat.browEyeGap - base.browEyeGap),
+        browDown: (base.browEyeGap - feat.browEyeGap),
+        eyesOpen: (feat.eyeAperture - base.eyeAperture),
+        smile:    (feat.mouthSmile - base.mouthSmile),
+        frown:    (feat.mouthFrown - base.mouthFrown),
+        lipPress: (base.lipGap - feat.lipGap),
+        crinkle:  (base.outerEyeGap - feat.outerEyeGap)
+      };
+
+      const s = {
+        happy:     (exps.happy||0)     * 1.0,
+        sad:       (exps.sad||0)       * 1.0,
+        angry:     (exps.angry||0)     * 1.0,
+        fearful:   (exps.fearful||0)   * 1.0,
+        disgusted: (exps.disgusted||0) * 1.0,
+        surprised: (exps.surprised||0) * 1.0,
+        neutral:   (exps.neutral||0)   * 1.0
+      };
+
+      // Add landmark evidence (tune weights to taste)
+      s.surprised +=  2.0 * Math.max(0, d.browUp)   + 1.6 * Math.max(0, d.eyesOpen);
+      s.happy     +=  2.2 * Math.max(0, d.smile)    + 1.4 * Math.max(0, d.crinkle);
+      s.angry     +=  1.8 * Math.max(0, d.browDown) + 1.6 * Math.max(0, d.lipPress);
+      s.sad       +=  1.6 * Math.max(0, d.frown);
+      s.fearful   +=  1.2 * Math.max(0, d.eyesOpen) + 0.8 * Math.max(0, d.browUp);
+      s.neutral   +=  0.5 * (d.smile < 0 && d.frown < 0 && d.eyesOpen < 0 ? 1 : 0);
+
+      let best='neutral', bestVal=-1;
+      for (const [k,v] of Object.entries(s)) if (v > bestVal){ best=k; bestVal=v; }
+      return best;
+    }
+
+    function subtleCueText(feat){
+      const cues = [];
+      if (feat.browEyeGap - base.browEyeGap > 0.015) cues.push('Brow ↑');
+      if (base.browEyeGap - feat.browEyeGap > 0.015) cues.push('Brow ↓');
+      if (feat.eyeAperture - base.eyeAperture > 0.012) cues.push('Eyes ↑');
+      if (feat.mouthSmile - base.mouthSmile > 0.08)  cues.push('Corners ←→');
+      if (feat.mouthFrown - base.mouthFrown > 0.010) cues.push('Corners ↓');
+      if (base.lipGap - feat.lipGap > 0.010)         cues.push('Lip press');
+      if (base.outerEyeGap - feat.outerEyeGap > 0.006) cues.push('Eye crinkle');
+      return cues;
     }
 
     async function init(){
@@ -192,21 +249,24 @@
             faceapi.draw.drawFaceExpressions(canvas, resized);
 
             const exps = det.expressions;
-            const top = Object.keys(exps).reduce((a,b)=> exps[a] > exps[b] ? a : b);
-            chipMain.textContent = `${EMOJI[top]||'🙂'} ${top[0].toUpperCase()+top.slice(1)}`;
+            const feat = calcFeatures(det.landmarks);
 
-            if (calibrated){
-              const feat = calcFeatures(det.landmarks);
-              const labs = subtleLabels(feat);
-              if (labs.length){ chipSubtle.style.display='block'; chipSubtle.textContent = 'Subtle: ' + labs.join(', '); }
-              else { chipSubtle.style.display='none'; }
-            }
+            // fused label
+            const label = labelEmotion(exps, feat);
+            chipMain.textContent = `${EMOJI[label]||'🙂'} ${label[0].toUpperCase()+label.slice(1)}`;
+
+            // cues explainer
+            const cues = subtleCueText(feat);
+            if (cues.length){ chipSubtle.style.display='block'; chipSubtle.textContent = 'Subtle: ' + cues.join(', '); }
+            else { chipSubtle.style.display='none'; }
+
             statusEl.textContent = 'Tracking…';
           } else {
             statusEl.textContent = 'No face detected';
             chipSubtle.style.display='none';
           }
 
+          // FPS meter
           frames++; const now=performance.now();
           if (now - mark > 1000){ fpsEl.textContent = frames + ' fps'; frames=0; mark=now; }
         }catch(err){ showErr('Detection error: ' + err.message); }
