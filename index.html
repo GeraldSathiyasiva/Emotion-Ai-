@@ -1,63 +1,102 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Emotion Detection Demo</title>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.9.0/dist/tf.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/face-api.js"></script>
+
+  <!-- face-api.js library -->
+  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+
   <style>
-    body { margin: 0; display: flex; flex-direction: column; align-items: center; }
-    video { width: 100%; max-width: 400px; }
-    #emotion { font-size: 2em; margin-top: 10px; }
+    :root { color-scheme: dark; }
+    body { margin:0; display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:100vh; background:#111; color:#fff; font-family:system-ui, -apple-system, Arial; }
+    #container { position:relative; width:100%; max-width:420px; }
+    video { width:100%; border-radius:12px; display:block; background:#000; }
+    canvas { position:absolute; top:0; left:0; pointer-events:none; }
+    #status { margin-top:12px; font-size:15px; opacity:.9; }
+    button { margin-top:12px; padding:10px 14px; border:0; border-radius:10px; background:#2a2a2a; color:#fff; }
+    .error { color:#ff8a8a; }
   </style>
 </head>
 <body>
-  <video id="video" autoplay muted></video>
-  <div id="emotion">Loading...</div>
+  <div id="container">
+    <video id="video" autoplay muted playsinline></video>
+    <!-- canvas will be injected -->
+  </div>
+  <div id="status">Loading models…</div>
+  <button id="retry" style="display:none;">Retry</button>
 
   <script>
+    const statusEl = document.getElementById('status');
+    const retryBtn = document.getElementById('retry');
     const video = document.getElementById('video');
-    const emotionDisplay = document.getElementById('emotion');
+    const container = document.getElementById('container');
+    const MODEL_URL = './models'; // <-- uses your repo’s models folder
 
-    // Load models from face-api.js CDN
-    Promise.all([
-      faceapi.nets.tinyFaceDetector.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models'),
-      faceapi.nets.faceExpressionNet.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models')
-    ]).then(startVideo);
-
-    function startVideo() {
-      navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
-        .then(stream => {
-          video.srcObject = stream;
-        })
-        .catch(err => {
-          emotionDisplay.innerText = "Error accessing camera: " + err;
-        });
+    // Helper to show errors on screen
+    function showError(msg) {
+      statusEl.classList.add('error');
+      statusEl.textContent = msg;
+      retryBtn.style.display = 'inline-block';
     }
 
-    video.addEventListener('play', () => {
-      const canvas = faceapi.createCanvasFromMedia(video);
-      document.body.append(canvas);
-      const displaySize = { width: video.width, height: video.height };
-      faceapi.matchDimensions(canvas, displaySize);
+    window.addEventListener('error', e => showError('Page error: ' + e.message));
+    window.addEventListener('unhandledrejection', e => showError('Promise error: ' + (e.reason && e.reason.message || e.reason)));
 
-      setInterval(async () => {
-        const detections = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()).withFaceExpressions();
-        if (detections && detections.expressions) {
-          const expressions = detections.expressions;
-          const maxEmotion = Object.keys(expressions).reduce((a, b) => expressions[a] > expressions[b] ? a : b);
-          emotionDisplay.innerText = `Emotion: ${maxEmotion}`;
-          canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
-          const resizedDetections = faceapi.resizeResults(detections, displaySize);
-          faceapi.draw.drawDetections(canvas, resizedDetections);
-          faceapi.draw.drawFaceExpressions(canvas, resizedDetections);
-        } else {
-          emotionDisplay.innerText = 'No face detected';
-          canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
-        }
-      }, 500);  // Every 0.5 sec (adjust for speed)
-    });
-  </script>
-</body>
-</html>
+    async function loadModels() {
+      try {
+        statusEl.textContent = 'Loading models…';
+        await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+        await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
+        statusEl.textContent = 'Starting camera…';
+      } catch (err) {
+        showError('Model load failed. Check /models files. ' + err);
+        throw err;
+      }
+    }
+
+    async function startCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+        video.srcObject = stream;
+        statusEl.textContent = 'Camera started.';
+      } catch (err) {
+        showError('Camera error: ' + err.message);
+        throw err;
+      }
+    }
+
+    function startDetection() {
+      const canvas = faceapi.createCanvasFromMedia(video);
+      canvas.style.top = '0';
+      canvas.style.left = '0';
+      container.appendChild(canvas);
+
+      const setSize = () => {
+        const w = video.videoWidth || video.clientWidth;
+        const h = video.videoHeight || video.clientHeight;
+        canvas.width = w; canvas.height = h;
+        faceapi.matchDimensions(canvas, { width: w, height: h });
+      };
+      video.addEventListener('loadedmetadata', setSize);
+      video.addEventListener('resize', setSize);
+
+      const opts = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 });
+
+      const loop = async () => {
+        try {
+          const w = video.videoWidth, h = video.videoHeight;
+          if (!w || !h) return requestAnimationFrame(loop);
+
+          const det = await faceapi.detectSingleFace(video, opts).withFaceExpressions();
+          const ctx = canvas.getContext('2d');
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+          if (det && det.expressions) {
+            const resized = faceapi.resizeResults(det, { width: canvas.width, height: canvas.height });
+            faceapi.draw.drawDetections(canvas, resized);
+            faceapi.draw.drawFaceExpressions(canvas, resized);
+
+            const exps = det.expressions;
+            cons
