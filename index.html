@@ -1,115 +1,58 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Emotion-Based Ad Testing</title>
+  <meta charset="utf-8">
+  <title>Emotion Recognition Ad Test</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 20px; }
-    #video, #overlay { position: absolute; top: 0; left: 0; }
-    #container { position: relative; width: 640px; height: 480px; }
-    button { margin: 10px 0; padding: 10px 14px; font-size: 14px; }
+    body { font-family: sans-serif; text-align: center; }
+    video, canvas { border: 1px solid black; }
   </style>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.18.0/dist/tf.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.18.0"></script>
+  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2"></script>
 </head>
 <body>
+  <h1>Emotion Recognition Ad Test</h1>
+  <video id="video" width="720" height="560" autoplay muted></video>
+  <canvas id="overlay" width="720" height="560"></canvas>
 
-<h1>Emotion-Based Ad Testing</h1>
+  <script>
+    const video = document.getElementById('video');
+    const overlay = document.getElementById('overlay');
+    const ctx = overlay.getContext('2d');
 
-<div>
-  <label>Ad URL (MP4):</label>
-  <input id="adUrl" type="text" placeholder="ads/my_ad.mp4" style="width: 300px;" />
-</div>
+    // Load models from the /models folder in your GitHub repo
+    Promise.all([
+      faceapi.nets.tinyFaceDetector.loadFromUri('./models'),
+      faceapi.nets.faceLandmark68Net.loadFromUri('./models'),
+      faceapi.nets.faceExpressionNet.loadFromUri('./models')
+    ]).then(startVideo).catch(err => console.error("Model loading error:", err));
 
-<div>
-  <label>Logo time (s):</label> <input id="tLogo" type="number" value="7.8" step="0.1" />
-  <label>Packshot time (s):</label> <input id="tPack" type="number" value="12.1" step="0.1" />
-  <label>CTA time (s):</label> <input id="tCta" type="number" value="17.0" step="0.1" />
-</div>
-
-<button id="btnLoadModels">1) Load Models</button>
-<button id="btnInit" disabled>2) Init Webcam</button>
-<button id="btnStart" disabled>3) Play & Analyze</button>
-<button id="btnExport" disabled>Export JSON</button>
-<p id="status"></p>
-
-<div id="container">
-  <video id="video" width="640" height="480" autoplay muted></video>
-  <canvas id="overlay" width="640" height="480"></canvas>
-</div>
-
-<video id="adVideo" width="640" controls style="margin-top:20px;"></video>
-
-<script>
-const MODEL_URL = './models';
-let detectionsStream = [];
-let video, overlay, ctx;
-let adVideo;
-let recording = false;
-
-document.getElementById('btnLoadModels').addEventListener('click', async () => {
-  document.getElementById('status').innerText = "Loading models...";
-  await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-  await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
-  await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
-  document.getElementById('status').innerText = "Models loaded!";
-  document.getElementById('btnInit').disabled = false;
-});
-
-document.getElementById('btnInit').addEventListener('click', async () => {
-  video = document.getElementById('video');
-  overlay = document.getElementById('overlay');
-  ctx = overlay.getContext('2d');
-
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-    video.srcObject = stream;
-    document.getElementById('status').innerText = "Webcam initialized!";
-    document.getElementById('btnStart').disabled = false;
-  } catch (err) {
-    console.error(err);
-    document.getElementById('status').innerText = "Error accessing webcam";
-  }
-});
-
-document.getElementById('btnStart').addEventListener('click', async () => {
-  const adUrl = document.getElementById('adUrl').value;
-  adVideo = document.getElementById('adVideo');
-  adVideo.src = adUrl;
-  adVideo.play();
-
-  recording = true;
-  detectionsStream = [];
-  runDetectionLoop();
-});
-
-document.getElementById('btnExport').addEventListener('click', () => {
-  const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(detectionsStream));
-  const dlAnchor = document.createElement('a');
-  dlAnchor.setAttribute("href", dataStr);
-  dlAnchor.setAttribute("download", "emotions.json");
-  document.body.appendChild(dlAnchor);
-  dlAnchor.click();
-  dlAnchor.remove();
-});
-
-async function runDetectionLoop() {
-  while (recording) {
-    const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
-      .withFaceLandmarks()
-      .withFaceExpressions();
-    ctx.clearRect(0, 0, overlay.width, overlay.height);
-    if (detection) {
-      faceapi.draw.drawDetections(overlay, detection);
-      faceapi.draw.drawFaceLandmarks(overlay, detection);
-      const ts = adVideo.currentTime;
-      detectionsStream.push({ t: ts, expressions: detection.expressions });
+    function startVideo() {
+      navigator.mediaDevices.getUserMedia({ video: {} })
+        .then(stream => {
+          video.srcObject = stream;
+        })
+        .catch(err => console.error("Camera error:", err));
     }
-    await new Promise(r => setTimeout(r, 100));
-  }
-}
-</script>
 
+    video.addEventListener('play', () => {
+      const displaySize = { width: video.width, height: video.height };
+      faceapi.matchDimensions(overlay, displaySize);
+
+      setInterval(async () => {
+        const detections = await faceapi.detectAllFaces(
+          video,
+          new faceapi.TinyFaceDetectorOptions()
+        ).withFaceLandmarks().withFaceExpressions();
+
+        ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+        const resizedDetections = faceapi.resizeResults(detections, displaySize);
+        faceapi.draw.drawDetections(overlay, resizedDetections);
+        faceapi.draw.drawFaceLandmarks(overlay, resizedDetections);
+        faceapi.draw.drawFaceExpressions(overlay, resizedDetections);
+      }, 100);
+    });
+  </script>
 </body>
 </html>
