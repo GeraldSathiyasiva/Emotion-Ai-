@@ -28,7 +28,7 @@
 
 <div class="row">
   <div class="panel" style="flex:1 1 560px;">
-    <label>Ad URL (MP4 / HTTPS or repo path like <code>ads/my_ad.mp4</code>)</label>
+    <label>Ad URL (MP4 — HTTPS or repo path like <code>ads/my_ad.mp4</code>)</label>
     <input id="adUrl" type="text" placeholder="ads/my_ad.mp4" />
 
     <div class="row" style="gap:10px;">
@@ -99,15 +99,15 @@
   const kPR = $('kPR'), kAWR = $('kAWR'), kPI = $('kPI'), statusEl = $('status'), fpsEl = $('fps');
 
   // ====== State ======
-  let timer=null, running=false, frames=0, tMark=performance.now();
-  const stream=[];   // {t, att, val, aro, pos, neg, gazeX, gazeY, jitter}
+  let samplingTimer=null, framesCount=0, fpsT0=performance.now();
+  const stream=[];   // {t, att, val, aro, pos, neg, gazeX, gazeY, jitter, face}
   let lastNose=null;
 
   // ====== Utils ======
   const clamp=(x,a,b)=>Math.min(b,Math.max(a,x));
   const mean=a=>a.length?a.reduce((x,y)=>x+y,0)/a.length:0;
   const peak=a=>a.length?Math.max(...a):0;
-  const std =a=>{ if(!a.length) return 0; const m=mean(a); return Math.sqrt(a.reduce((s,x)=>s+(x-m)*(x-m),0)/a.length); };
+  const stdev=a=>{ if(!a.length) return 0; const m=mean(a); return Math.sqrt(a.reduce((s,x)=>s+(x-m)*(x-m),0)/a.length); };
   const norm01=(x,min,max)=> max>min?clamp((x-min)/(max-min),0,1):0;
   const sigmoid=x=>1/(1+Math.exp(-x));
   const parsePair = s => { const [a,b]=(s||'').split(',').map(Number); return [Number(a||0),Number(b||0)]; }
@@ -152,8 +152,9 @@
   // ====== Windows & deltas ======
   function windowSlice(t0,t1){ return stream.filter(r=>r.t>=t0 && r.t<t1); }
   function windowStats(t0,t1,key){
-    const arr = windowSlice(t0,t1).map(r=>r[key]);
-    return { mean: mean(arr), peak: peak(arr), std: std(arr) };
+    const rows = windowSlice(t0,t1);
+    const arr = rows.map(r=>r[key]);
+    return { mean: mean(arr), peak: peak(arr), std: stdev(arr) };
   }
   function deltaFeature(te, key){
     const base0 = te - BASELINE_PRE[0], base1 = te - BASELINE_PRE[1];
@@ -176,8 +177,8 @@
   function engagementIndex(t0, dur, roiCTA){
     const eyes = windowStats(t0, t0+dur, 'att').mean;
     const dwell = gazeDwell(t0, roiCTA, dur);
-    const jitterStd = std( windowSlice(t0, t0+dur).map(r=>r.jitter) );
-    const jitterN = clamp(1 - norm01(jitterStd, 0.2, 2.0), 0, 1);
+    const jit = stdev( windowSlice(t0, t0+dur).map(r=>r.jitter) );
+    const jitterN = clamp(1 - norm01(jit, 0.2, 2.0), 0, 1);
     return 0.5*dwell + 0.3*eyes + 0.2*jitterN;
   }
   function computeKPIs(winLogo, winPack, winCTA, roiLogo, roiPack, roiCTA){
@@ -190,11 +191,11 @@
     const gaze_logo = gazeDwell(tLogo, roiLogo, RESP_DUR);
 
     const baseAll = windowStats(0, Math.max(0.1, tLogo), 'val');
-    const z = (x, m=baseAll.mean, s=0.2)=> s>1e-6 ? (x-m)/(s||0.2) : 0;
+    const z = (x, m=baseAll.mean, s=0.25)=> s>1e-6 ? (x-m)/s : 0;
 
     const PR = 100/(1+Math.exp(-(
-      0.9*z(dV_logo.dMean, 0, 0.25) +
-      0.5*z(dV_pack.dMean, 0, 0.25) +
+      0.9*z(dV_logo.dMean) +
+      0.5*z(dV_pack.dMean) +
       0.4*z(smile_logo_peak, 0.15, 0.2) +
       0.3*z(gaze_logo, 0.2, 0.25) -
       0.4*z(neg_logo_peak, 0.1, 0.2)
@@ -207,7 +208,7 @@
     const AWR = 100/(1+Math.exp(-(
       0.6*z(dwell_logo, 0.2, 0.25) +
       0.5*z(-lat_logo, -0.8, 0.4) +
-      0.4*z(dA_logo, 0, 0.25)
+      0.4*z(dA_logo)
     )));
 
     const wCTA = windowStats(tCTA, tCTA+Math.max(2.5, RESP_DUR), 'val');
@@ -217,7 +218,7 @@
     const neg_cta = windowStats(tCTA, tCTA+Math.max(2.5, RESP_DUR), 'neg').peak;
 
     const PI = 100/(1+Math.exp(-(
-      0.8*z(v_cta,  0, 0.3) +
+      0.8*z(v_cta, 0, 0.3) +
       0.5*z(eng_cta, 0.3, 0.25) +
       0.3*z(v_cta_pk,0.15,0.2) -
       0.5*z(neg_cta, 0.1, 0.2)
@@ -228,9 +229,9 @@
 
   // ====== CSV/JSON export ======
   function toCSV(rows){
-    const header = ['t','att','val','aro','pos','neg','gazeX','gazeY','jitter'];
+    const header = ['t','att','val','aro','pos','neg','gazeX','gazeY','jitter','face'];
     const lines = [header.join(',')];
-    rows.forEach(r => lines.push([r.t,r.att,r.val,r.aro,r.pos,r.neg,r.gazeX,r.gazeY,r.jitter].map(x=>typeof x==='number'?x.toFixed(4):x).join(',')));
+    rows.forEach(r => lines.push([r.t,r.att,r.val,r.aro,r.pos,r.neg,r.gazeX,r.gazeY,r.jitter,r.face].map(x=>typeof x==='number'?x.toFixed(4):x).join(',')));
     return lines.join('\n');
   }
   function download(name, text, type='text/plain'){
@@ -269,19 +270,19 @@
   });
 
   // ====== Sampling loop ======
-  let samplingTimer=null, framesCount=0, fpsT0=performance.now();
   async function sampleOnce(){
     try{
+      const tNow = +ad.currentTime.toFixed(3); // tie samples to ad timeline
       const det = await faceapi
-        .detectSingleFace(cam, new faceapi.TinyFaceDetectorOptions({inputSize:320, scoreThreshold:0.4}))
+        .detectSingleFace(cam, new faceapi.TinyFaceDetectorOptions({inputSize:320, scoreThreshold:0.3}))
         .withFaceLandmarks().withFaceExpressions();
 
       ctx.clearRect(0,0,canv.width,canv.height);
+
       if (det){
         const res = faceapi.resizeResults(det, { width: canv.width, height: canv.height });
         faceapi.draw.drawDetections(canv, res);
         faceapi.draw.drawFaceLandmarks(canv, res);
-        // faceapi.draw.drawFaceExpressions(canv, res); // optional
 
         const feats = featuresFromLandmarks(det);
         const e = det.expressions || {};
@@ -292,43 +293,61 @@
         const neg = (e.angry||0)+(e.sad||0)+(e.disgusted||0);
 
         stream.push({
-          t: +ad.currentTime.toFixed(3),
+          t: tNow,
           att, val, aro, pos, neg,
           gazeX: feats.gazeX, gazeY: feats.gazeY,
-          jitter: feats.jitter
+          jitter: feats.jitter,
+          face: 1
+        });
+      } else {
+        // Push a placeholder so the stream is never empty
+        stream.push({
+          t: tNow, att: 0, val: 0, aro: 0, pos: 0, neg: 0,
+          gazeX: 0.5, gazeY: 0.5, jitter: 0, face: 0
         });
       }
-      // FPS
+
+      // FPS indicator
       framesCount++; const now = performance.now();
-      if (now - fpsT0 > 1000){ fpsEl.textContent = framesCount + ' fps'; framesCount=0; fpsT0 = now; }
-    }catch(e){ /* ignore intermittent errors */ }
+      if (now - fpsT0 > 1000){ $('fps').textContent = framesCount + ' fps'; framesCount=0; fpsT0 = now; }
+      // Live sample counter
+      statusEl.textContent = `Recording… samples: ${stream.length}`;
+
+    }catch(e){
+      // ignore intermittent errors
+    }
   }
 
-  function startSampling(){
-    stream.length = 0; lastNose = null;
-    samplingTimer = setInterval(sampleOnce, SAMPLE_MS);
-  }
-  function stopSampling(){
-    clearInterval(samplingTimer); samplingTimer = null;
-  }
+  function startSampling(){ stream.length = 0; lastNose = null; samplingTimer = setInterval(sampleOnce, SAMPLE_MS); }
+  function stopSampling(){ clearInterval(samplingTimer); samplingTimer = null; }
 
-  // ====== Play & analyze ======
+  // ====== Play & Analyze (start sampling only when ad actually plays) ======
   $('btnPlay').addEventListener('click', async () => {
     const url = $('adUrl').value.trim();
     if (!url){ statusEl.textContent = 'Enter a valid Ad URL (e.g., ads/my_ad.mp4)'; return; }
-    ad.src = url; await ad.play().catch(()=>{});
-    startSampling();
-    statusEl.textContent = 'Recording…';
 
+    ad.src = url;
+
+    ad.onplaying = () => {
+      if (!samplingTimer) {
+        startSampling();
+        statusEl.textContent = 'Recording…';
+      }
+    };
     ad.onpause = () => { statusEl.textContent = 'Paused'; };
     ad.onended = () => {
       stopSampling();
       statusEl.textContent = 'Analyzing…';
       analyzeAndShow();
     };
+
+    try { await ad.play(); }
+    catch(e) { statusEl.textContent = 'Click the video to start playback (autoplay blocked)'; }
   });
 
   function analyzeAndShow(){
+    if (!stream.length){ statusEl.textContent = 'No samples captured.'; return; }
+
     const [logoS, logoE] = parsePair($('logoWin').value);
     const [packS, packE] = parsePair($('packWin').value);
     const [ctaS,  ctaE ] = parsePair($('ctaWin').value);
@@ -337,12 +356,11 @@
     const roiPack = parseQuad($('packRoi').value);
     const roiCTA  = parseQuad($('ctaRoi').value);
 
-    if (!stream.length){ statusEl.textContent = 'No samples captured.'; return; }
-
     const KPIs = computeKPIs([logoS,logoE],[packS,packE],[ctaS,ctaE], roiLogo, roiPack, roiCTA);
-    kPR.textContent  = KPIs.PR.toString();
-    kAWR.textContent = KPIs.AWR.toString();
-    kPI.textContent  = KPIs.PI.toString();
+    $('kPR').textContent  = KPIs.PR.toString();
+    $('kAWR').textContent = KPIs.AWR.toString();
+    $('kPI').textContent  = KPIs.PI.toString();
+
     statusEl.textContent = 'Done. Export results below.';
     $('btnCSV').disabled = false; $('btnJSON').disabled = false;
   }
