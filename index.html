@@ -1,276 +1,411 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>MediaPipe Blendshape Emotions (Web)</title>
-  <style>
-    :root { color-scheme: dark; }
-    body { margin:0; min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; background:#0f1115; color:#fff; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; }
-    #container { position:relative; width:100%; max-width:420px; }
-    video { width:100%; border-radius:14px; background:#000; display:block; }
-    canvas { position:absolute; inset:0; pointer-events:none; border-radius:14px; }
-    #hud { width:100%; max-width:420px; display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:10px; }
-    #status { opacity:.95; }
-    #fps { opacity:.7; }
-    .chip {
-      position:absolute; left:50%; transform:translateX(-50%);
-      background:rgba(255,255,255,.12); padding:6px 12px; border-radius:999px;
-      font-weight:600; backdrop-filter: blur(6px); box-shadow:0 6px 18px rgba(0,0,0,.2);
-    }
-    #chipMain { top:10px; }
-    #chipSubtle { top:44px; display:none; background:rgba(88,170,255,.18); }
-    .row { margin-top:10px; display:flex; gap:8px; align-items:center; }
-    button { padding:8px 12px; border:0; border-radius:10px; background:#2a2a2a; color:#fff; cursor:pointer; }
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>CV-Only Ad Test — PR / AWR / PI</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 16px; background:#0f1115; color:#fff; }
+  .row { display:flex; flex-wrap:wrap; gap:14px; align-items:flex-start; }
+  .panel { flex:1 1 340px; border:1px solid #222; border-radius:12px; padding:12px; background:#131722; }
+  label { display:block; font-weight:600; margin-top:10px; }
+  input[type="text"], input[type="number"] { width:100%; padding:8px 10px; border-radius:8px; border:1px solid #333; background:#161a26; color:#fff; }
+  .btns { display:flex; gap:10px; align-items:center; margin-top:12px; flex-wrap:wrap; }
+  button { padding:10px 14px; border:0; border-radius:10px; background:#2a2f3d; color:#fff; cursor:pointer; }
+  button:disabled { opacity:.55; cursor:not-allowed; }
+  video, canvas { width:100%; border-radius:12px; background:#000; }
+  .kpi { display:flex; gap:10px; margin-top:10px; }
+  .kpi>div { flex:1 1 0; background:#101520; border:1px solid #222; border-radius:10px; padding:10px; text-align:center; }
+  .tag { display:inline-block; padding:2px 6px; background:#233; border-radius:6px; font-size:12px; margin-right:6px; }
+  .muted { color:#9aa3b2; font-size:12px; }
+  .ok { color:#62e2b3; }
+  .warn { color:#f3b65b; }
+  .err { color:#ff8a8a; }
+</style>
+<!-- libs -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.18.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 </head>
 <body>
-  <div id="container">
-    <video id="video" autoplay muted playsinline></video>
-    <canvas id="overlay"></canvas>
-    <div id="chipMain"   class="chip">😐 Neutral</div>
-    <div id="chipSubtle" class="chip">Subtle: —</div>
+
+<h2>CV-Only Ad Test (Webcam)</h2>
+
+<div class="row">
+  <!-- Left: Ad Player + Live status -->
+  <div class="panel" style="flex:1 1 560px;">
+    <label>Ad URL (MP4 / HTTPS)</label>
+    <input id="adUrl" type="text" placeholder="https://cdn.example.com/ad.mp4 or ads/my_ad.mp4" />
+
+    <div class="row" style="gap:10px;">
+      <div class="panel" style="flex:1 1 240px;">
+        <b>Brand moment windows (seconds)</b>
+        <div class="muted">Start and end times for each window. You can add more later.</div>
+        <label>Logo window: start,end</label>
+        <input id="logoWin" type="text" value="5,7.5" />
+        <label>Packshot window: start,end</label>
+        <input id="packWin" type="text" value="10,12" />
+        <label>CTA window: start,end</label>
+        <input id="ctaWin" type="text" value="18,21" />
+      </div>
+      <div class="panel" style="flex:1 1 240px;">
+        <b>Gaze ROIs on ad (normalized 0..1)</b>
+        <div class="muted">Very rough gaze via head yaw/pitch → screen X/Y. (Optional)</div>
+        <label>Logo ROI: x,y,w,h</label>
+        <input id="logoRoi" type="text" value="0.78,0.08,0.18,0.12" />
+        <label>Pack ROI: x,y,w,h</label>
+        <input id="packRoi" type="text" value="0.65,0.30,0.30,0.40" />
+        <label>CTA ROI: x,y,w,h</label>
+        <input id="ctaRoi" type="text" value="0.72,0.80,0.22,0.14" />
+      </div>
+    </div>
+
+    <div class="btns">
+      <button id="btnLoadModels">1) Load models</button>
+      <button id="btnCam" disabled>2) Start webcam</button>
+      <button id="btnPlay" disabled>3) Play & analyze</button>
+      <button id="btnCSV" disabled>Download CSV</button>
+      <button id="btnJSON" disabled>Download JSON</button>
+      <span id="status" class="muted">—</span>
+    </div>
+
+    <div class="row" style="margin-top:10px;">
+      <div style="flex:1 1 380px;">
+        <video id="ad" controls playsinline></video>
+      </div>
+      <div style="flex:1 1 220px;">
+        <video id="cam" autoplay muted playsinline style="width:100%;height:auto;"></video>
+        <canvas id="overlay" style="width:100%;height:auto;"></canvas>
+        <div class="muted" id="fps">— fps</div>
+      </div>
+    </div>
+
+    <div class="kpi">
+      <div><div class="muted">Positive Recognition</div><div id="kPR" class="ok">—</div></div>
+      <div><div class="muted">Awareness</div><div id="kAWR" class="ok">—</div></div>
+      <div><div class="muted">Purchase Intention</div><div id="kPI" class="ok">—</div></div>
+    </div>
   </div>
 
-  <div id="hud">
-    <div id="status">Loading MediaPipe…</div>
-    <div id="fps"></div>
+  <!-- Right: Notes -->
+  <div class="panel" style="flex:1 1 320px;">
+    <b>How it works (no surveys)</b>
+    <ul>
+      <li>Samples webcam ~5–10 Hz while ad plays.</li>
+      <li>Computes <i>attention</i> (eyes open), <i>valence</i> (happy vs negative), <i>arousal</i> (activation), rough <i>gaze</i>, head jitter.</li>
+      <li>Compares response vs baseline around brand windows.</li>
+      <li>Outputs PR/AWR/PI (0–100) + CSV/JSON.</li>
+    </ul>
+    <div class="muted">Tip: keep good lighting; look at screen. WebView on desktop may block camera; test on mobile or open in browser.</div>
   </div>
+</div>
 
-  <div class="row">
-    <button id="recal">Re-calibrate (neutral)</button>
-    <button id="perf">Performance: High</button>
-  </div>
+<script>
+  // ====== Config ======
+  const MODEL_URL = './models'; // tiny_face_detector, face_landmark_68, face_expression here
+  const SAMPLE_MS = 150;        // ~6–7 Hz
+  const BASELINE_PRE = [2.0, 0.5]; // baseline window [te-2.0, te-0.5]
+  const RESP_DUR = 2.0;           // response window [te, te+2.0]
 
-  <!-- Use ES module import so FilesetResolver/FaceLandmarker are defined -->
-  <script type="module">
-    import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.11";
+  // ====== DOM ======
+  const el = id => document.getElementById(id);
+  const ad = el('ad'), cam = el('cam'), canv = el('overlay'), ctx = canv.getContext('2d');
+  const statusEl = el('status'), fpsEl = el('fps');
+  const kPR = el('kPR'), kAWR = el('kAWR'), kPI = el('kPI');
 
-    // ======= CONFIG =======
-    const MODEL_ASSET_URL =
-      "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"; // pinned model
-    const WASM_ROOT =
-      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.11/wasm"; // match version
+  // ====== State ======
+  let running = false, timer = null, frames=0, tMark=performance.now();
+  const stream = []; // per-sample rows
+  let lastNose = null; // for head jitter
 
-    let highPerf = true;
+  // ====== Utils ======
+  const clamp = (x,a,b)=>Math.min(b,Math.max(a,x));
+  const mean = arr => arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : 0;
+  const peak = arr => arr.length ? Math.max(...arr) : 0;
+  const std  = arr => {
+    if (!arr.length) return 0;
+    const m = mean(arr);
+    return Math.sqrt(arr.reduce((s,x)=>s+(x-m)*(x-m),0)/arr.length);
+  };
+  const norm01 = (x,min,max)=> (max>min) ? clamp((x-min)/(max-min),0,1) : 0.0;
+  const sigmoid = x => 1/(1+Math.exp(-x));
 
-    // Emojis (macro + nuance)
-    const EMOJI = {
-      Neutral:'😐', Happy:'😃', Sad:'😢', Angry:'😠', Fearful:'😨', Disgusted:'🤢', Surprised:'😮',
-      Amused:'😄', Attentive:'👀', Skeptical:'🤨', Determined:'😤', Concerned:'😟', Relaxed:'🙂'
+  function parsePair(s){
+    const [a,b] = (s||'').split(',').map(Number); return [Number(a||0), Number(b||0)];
+  }
+  function parseQuad(s){
+    const [x,y,w,h] = (s||'').split(',').map(Number);
+    return {x:Number(x||0), y:Number(y||0), w:Number(w||0), h:Number(h||0)};
+  }
+  function inBox(x,y,b){ return x>=b.x && x<=b.x+b.w && y>=b.y && y<=b.y+b.h; }
+
+  // ====== Face features (face-api.js landmarks) ======
+  function eyeAspectRatio(p, ids){ // average vertical/horizontal ratio
+    const v = (p[ids[1]].y - p[ids[5]].y + p[ids[2]].y - p[ids[4]].y)/2;
+    const h = (p[ids[3]].x - p[ids[0]].x);
+    return Math.max(0, v/(Math.abs(h)+1e-5));
+  }
+  function featuresFromLandmarks(det){
+    const p = det.landmarks.positions;
+    // Eyes: EAR proxies
+    const earL = eyeAspectRatio(p,[36,37,38,39,40,41]);
+    const earR = eyeAspectRatio(p,[42,43,44,45,46,47]);
+    const eyesOpen = clamp((earL+earR)/2 * 12, 0, 1); // scale EAR into ~0..1
+
+    // Rough head yaw/pitch from keypoints
+    const nose = p[30]; // nose tip
+    const left = p[2], right = p[14], top = p[27], bottom = p[8];
+    const cx = (left.x + right.x)/2, cy = (top.y + bottom.y)/2;
+    const yaw  = clamp((nose.x - cx) / (Math.abs(right.x-left.x)+1e-5), -0.6, 0.6); // left/right
+    const pitch= clamp((nose.y - cy) / (Math.abs(bottom.y-top.y)+1e-5), -0.6, 0.6); // up/down
+
+    // Map yaw/pitch to [0,1] gaze estimate (very rough)
+    const gazeX = clamp(0.5 + yaw * -0.9, 0, 1);   // look left → smaller X
+    const gazeY = clamp(0.5 + pitch *  0.9, 0, 1); // look up → larger Y
+
+    // Head jitter (px distance from last nose)
+    let jitter = 0;
+    if (lastNose) jitter = Math.hypot(nose.x-lastNose.x, nose.y-lastNose.y);
+    lastNose = {x:nose.x, y:nose.y};
+
+    return { eyesOpen, gazeX, gazeY, jitter };
+  }
+
+  // Expression → valence/arousal (FER proxy)
+  function valenceFromExpr(e){
+    const pos = e.happy || 0;
+    const neg = (e.angry||0) + (e.sad||0) + (e.disgusted||0);
+    const neu = e.neutral || 0;
+    // valence -1..+1
+    return clamp((pos - neg), -1, 1);
+  }
+  function arousalFromExpr(e){
+    // activation from high-energy emotions
+    const act = (e.surprised||0) + (e.fearful||0) + (e.angry||0) + (e.happy||0)*0.5;
+    return clamp(act, 0, 1);
+  }
+
+  function attentionScore(eyesOpen){ return clamp(eyesOpen, 0, 1); }
+
+  // ====== Windows & deltas ======
+  function windowSlice(t0,t1){ return stream.filter(r=>r.t>=t0 && r.t<t1); }
+  function windowStats(t0,t1,key){
+    const arr = windowSlice(t0,t1).map(r=>r[key]);
+    return { mean: mean(arr), peak: peak(arr), std: std(arr) };
+  }
+  function deltaFeature(te, key){
+    const base0 = te - BASELINE_PRE[0], base1 = te - BASELINE_PRE[1];
+    const base = windowStats(base0, base1, key);
+    const resp = windowStats(te, te + RESP_DUR, key);
+    return { dMean: resp.mean - base.mean, dPeak: resp.peak - base.peak, base, resp };
+  }
+
+  // Dwell/latency using rough gaze (optional)
+  function gazeDwell(te, box, dur=2.0){
+    const pts = windowSlice(te, te+dur);
+    const hits = pts.filter(p=>inBox(p.gazeX, p.gazeY, box)).length;
+    return hits / Math.max(1, pts.length);
+  }
+  function firstFixLatency(te, box, maxDur=1.5){
+    const pts = windowSlice(te, te+maxDur);
+    const hit = pts.find(p=>inBox(p.gazeX, p.gazeY, box));
+    return hit ? (hit.t - te) : maxDur;
+  }
+
+  // ====== PR / AWR / PI (0–100) per your method ======
+  function computeKPIs(winLogo, winPack, winCTA, roiLogo, roiPack, roiCTA){
+    const tLogo = winLogo[0], tPack = winPack[0], tCTA = winCTA[0];
+
+    // Positive Recognition (PR)
+    const dV_logo = deltaFeature(tLogo, 'val');
+    const dV_pack = deltaFeature(tPack, 'val');
+    const smile_logo_peak = windowStats(tLogo, tLogo+RESP_DUR, 'pos').peak; // pos ~ happy prob
+    const neg_logo_peak   = windowStats(tLogo, tLogo+RESP_DUR, 'neg').peak; // neg ~ angry+sad+disgusted
+    const gaze_logo = gazeDwell(tLogo, roiLogo, RESP_DUR);
+
+    // z-score vs simple per-session baselines (robust-ish)
+    const baseAll = windowStats(0, Math.max(0.1, tLogo), 'val'); // pre-ad or early
+    const z = (x, m=baseAll.mean, s=0.2)=> (s>1e-6 ? (x-m)/(s||0.2) : 0); // fallback s
+
+    const PR = 100*sigmoid(
+      0.9*z(dV_logo.dMean, 0, 0.25) +
+      0.5*z(dV_pack.dMean, 0, 0.25) +
+      0.4*z(smile_logo_peak, 0.15, 0.2) +
+      0.3*z(gaze_logo, 0.2, 0.25) -
+      0.4*z(neg_logo_peak, 0.1, 0.2)
+    );
+
+    // Awareness (AWR)
+    const dwell_logo = gazeDwell(tLogo, roiLogo, RESP_DUR);
+    const lat_logo   = firstFixLatency(tLogo, roiLogo, 1.5);
+    const dA_logo    = deltaFeature(tLogo, 'aro').dMean;
+
+    const AWR = 100*sigmoid(
+      0.6*z(dwell_logo, 0.2, 0.25) +
+      0.5*z(-lat_logo, -0.8, 0.4) +  // faster is better
+      0.4*z(dA_logo, 0, 0.25)
+      // + 0.3*z(consistencyAcrossBrandMoments) // add if multiple brand windows
+    );
+
+    // Purchase Intention (PI)
+    const wCTA = windowStats(tCTA, tCTA+Math.max(2.5, RESP_DUR), 'val');
+    const v_cta = wCTA.mean;
+    const v_cta_pk = wCTA.peak;
+    const eng_cta = engagementIndex(tCTA, Math.max(2.5, RESP_DUR), roiCTA);
+    const neg_cta = windowStats(tCTA, tCTA+Math.max(2.5, RESP_DUR), 'neg').peak;
+
+    const PI = 100*sigmoid(
+      0.8*z(v_cta,  0, 0.3) +
+      0.5*z(eng_cta, 0.3, 0.25) +
+      0.3*z(v_cta_pk,0.15,0.2) -
+      0.5*z(neg_cta, 0.1, 0.2)
+    );
+
+    return { PR: +PR.toFixed(1), AWR:+AWR.toFixed(1), PI:+PI.toFixed(1) };
+  }
+
+  function engagementIndex(t0, dur, roiCTA){
+    const eyes = windowStats(t0, t0+dur, 'att').mean; // attention ~ eyes open
+    const dwell = gazeDwell(t0, roiCTA, dur);
+    const jitterStd = std( windowSlice(t0, t0+dur).map(r=>r.jitter) );
+    const jitterN = clamp(1 - norm01(jitterStd, 0.2, 2.0), 0, 1); // lower jitter → higher
+    return 0.5*dwell + 0.3*eyes + 0.2*jitterN;
+  }
+
+  // ====== CSV / JSON ======
+  function toCSV(rows){
+    const header = ['t','att','val','aro','pos','neg','gazeX','gazeY','jitter'];
+    const lines = [header.join(',')];
+    rows.forEach(r => lines.push([r.t,r.att,r.val,r.aro,r.pos,r.neg,r.gazeX,r.gazeY,r.jitter].map(x=>typeof x==='number'?x.toFixed(4):x).join(',')));
+    return lines.join('\n');
+  }
+  function download(name, text, type='text/plain'){
+    const blob = new Blob([text], {type});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = name; a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  // ====== Face-API init ======
+  el('btnLoadModels').onclick = async () => {
+    statusEl.textContent = 'Loading models…';
+    await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+    await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+    await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
+    statusEl.textContent = 'Models loaded. Start webcam.';
+    el('btnCam').disabled = false;
+  };
+
+  el('btnCam').onclick = async () => {
+    try{
+      const st = await navigator.mediaDevices.getUserMedia({ video:{facingMode:'user', width:{ideal:640}, height:{ideal:480}}, audio:false });
+      cam.srcObject = st; await cam.play();
+      canv.width = cam.videoWidth || 640; canv.height = cam.videoHeight || 480;
+      statusEl.textContent = 'Webcam ready. Enter ad URL and press Play & analyze.';
+      el('btnPlay').disabled = false;
+    }catch(e){
+      statusEl.textContent = 'Camera error: ' + e.message;
+    }
+  };
+
+  // ====== Main sampling loop ======
+  async function sampleOnce(){
+    try{
+      const det = await faceapi
+        .detectSingleFace(cam, new faceapi.TinyFaceDetectorOptions({inputSize:320, scoreThreshold:0.4}))
+        .withFaceLandmarks().withFaceExpressions();
+
+      ctx.clearRect(0,0,canv.width,canv.height);
+      if (det){
+        const res = faceapi.resizeResults(det, { width: canv.width, height: canv.height });
+        faceapi.draw.drawDetections(canv, res);
+        faceapi.draw.drawFaceLandmarks(canv, res);
+        faceapi.draw.drawFaceExpressions(canv, res);
+
+        const feats = featuresFromLandmarks(det);
+        const e = det.expressions || {};
+        const att = attentionScore(feats.eyesOpen);
+        const val = valenceFromExpr(e);
+        const aro = arousalFromExpr(e);
+        const pos = (e.happy||0);
+        const neg = (e.angry||0)+(e.sad||0)+(e.disgusted||0);
+
+        stream.push({
+          t: +ad.currentTime.toFixed(3),
+          att, val, aro, pos, neg,
+          gazeX: feats.gazeX, gazeY: feats.gazeY,
+          jitter: feats.jitter
+        });
+      }
+      // FPS
+      frames++; const now = performance.now();
+      if (now - tMark > 1000){ fpsEl.textContent = frames + ' fps'; frames=0; tMark = now; }
+    }catch(e){
+      // swallow intermittent errors
+    }
+  }
+
+  function startSampling(){
+    running = true; stream.length = 0; lastNose = null;
+    timer = setInterval(sampleOnce, SAMPLE_MS);
+  }
+  function stopSampling(){
+    running = false; clearInterval(timer); timer = null;
+  }
+
+  // ====== Play & analyze ======
+  el('btnPlay').onclick = async () => {
+    const url = el('adUrl').value.trim();
+    if (!url){ statusEl.textContent = 'Enter a valid ad URL'; return; }
+    ad.src = url; await ad.play().catch(()=>{});
+    startSampling();
+    statusEl.textContent = 'Recording…';
+
+    ad.onpause = () => { if (running){ statusEl.textContent = 'Paused'; } };
+    ad.onended = () => {
+      stopSampling();
+      statusEl.textContent = 'Analyzing…';
+      analyzeAndShow();
     };
+  };
 
-    const video = document.getElementById('video');
-    const canvas = document.getElementById('overlay');
-    const ctx = canvas.getContext('2d');
-    const statusEl = document.getElementById('status');
-    const fpsEl = document.getElementById('fps');
-    const chipMain = document.getElementById('chipMain');
-    const chipSubtle = document.getElementById('chipSubtle');
-    const btnRecal = document.getElementById('recal');
-    const btnPerf = document.getElementById('perf');
+  function analyzeAndShow(){
+    const [logoS, logoE] = parsePair(el('logoWin').value);
+    const [packS, packE] = parsePair(el('packWin').value);
+    const [ctaS,  ctaE ] = parsePair(el('ctaWin').value);
 
-    const base = {
-      browInnerUp:0, browDown:0, outerBrowUp:0,
-      eyesOpen:0, squint:0,
-      smile:0, frown:0, lipPress:0, lipCornerDown:0,
-      cheekRaise:0, jawOpen:0
-    };
-    let calibrated = false;
+    const roiLogo = parseQuad(el('logoRoi').value);
+    const roiPack = parseQuad(el('packRoi').value);
+    const roiCTA  = parseQuad(el('ctaRoi').value);
 
-    function showErr(m){ statusEl.textContent = m; statusEl.style.color = '#ff8a8a'; }
+    // Guard: nothing captured
+    if (!stream.length){ statusEl.textContent = 'No samples captured.'; return; }
 
-    // ======= MediaPipe init =======
-    let faceLandmarker; let lastVideoTime = -1;
+    // Compute KPIs
+    const KPIs = computeKPIs([logoS,logoE],[packS,packE],[ctaS,ctaE], roiLogo, roiPack, roiCTA);
+    kPR.textContent  = KPIs.PR.toFixed(1);
+    kAWR.textContent = KPIs.AWR.toFixed(1);
+    kPI.textContent  = KPIs.PI.toFixed(1);
+    statusEl.textContent = 'Done. Export results below.';
+    el('btnCSV').disabled = false; el('btnJSON').disabled = false;
+  }
 
-    async function initMediapipe(){
-      const vision = await FilesetResolver.forVisionTasks(WASM_ROOT);
-      faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
-        baseOptions: { modelAssetPath: MODEL_ASSET_URL },
-        runningMode: "VIDEO",
-        numFaces: 1,
-        outputFaceBlendshapes: true,
-        outputFacialTransformationMatrixes: false
-      });
-    }
-
-    async function startCamera(){
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode:'user',
-          width:{ ideal:1280 }, height:{ ideal:720 },
-          frameRate: highPerf ? { ideal:60, max:120 } : { ideal:30, max:30 }
-        }, audio:false
-      });
-      video.srcObject = stream;
-      await new Promise(res => { if (video.readyState >= 2) res(); else video.onloadedmetadata = () => res(); });
-      try { await video.play(); } catch(_) {}
-      resizeCanvas();
-    }
-
-    function resizeCanvas(){
-      const w = video.videoWidth || 640, h = video.videoHeight || 480;
-      canvas.width = w; canvas.height = h;
-    }
-    window.addEventListener('resize', resizeCanvas);
-    video.addEventListener('loadeddata', resizeCanvas);
-
-    // ======= Helpers =======
-    function toMap(blendshapes){
-      const m = {};
-      if (!blendshapes?.categories) return m;
-      for (const c of blendshapes.categories) m[c.categoryName] = c.score;
-      return m;
-    }
-    function cuesFromBlend(m){
-      const browInnerUp = m["browInnerUp"]||0;
-      const browOuterUp = ((m["browOuterUpLeft"]||0)+(m["browOuterUpRight"]||0))/2;
-      const browDown    = ((m["browDownLeft"]||0)+(m["browDownRight"]||0))/2;
-
-      const eyesWide    = ((m["eyeWideLeft"]||0)+(m["eyeWideRight"]||0))/2;
-      const eyeSquint   = ((m["eyeSquintLeft"]||0)+(m["eyeSquintRight"]||0))/2;
-      const eyeBlink    = ((m["eyeBlinkLeft"]||0)+(m["eyeBlinkRight"]||0))/2;
-
-      const smile       = ((m["mouthSmileLeft"]||0)+(m["mouthSmileRight"]||0))/2;
-      const frown       = ((m["mouthFrownLeft"]||0)+(m["mouthFrownRight"]||0))/2;
-      const lipPress    = (m["mouthPressLeft"]||0) + (m["mouthPressRight"]||0);
-      const lipCornerDown = frown;
-      const jawOpen     = m["jawOpen"]||0;
-      const cheekRaise  = ((m["cheekPuff"]||0)+(m["cheekSquintLeft"]||0)+(m["cheekSquintRight"]||0))/3;
-
-      const eyesOpen = Math.max(0, eyesWide - eyeBlink + (1 - eyeSquint) * 0.2);
-      return { browInnerUp, browOuterUp, browDown, eyesOpen, eyeSquint, smile, frown, lipPress, lipCornerDown, jawOpen, cheekRaise };
-    }
-
-    async function calibrate(){
-      statusEl.textContent = 'Calibrating… relax face for 2s';
-      const t0 = performance.now();
-      const acc = {}; let n = 0;
-
-      while (performance.now() - t0 < 2000){
-        const res = faceLandmarker.detectForVideo(video, performance.now());
-        if (res?.faceBlendshapes?.length){
-          const m = toMap(res.faceBlendshapes[0]);
-          const c = cuesFromBlend(m);
-          for (const [k,v] of Object.entries(c)){ acc[k] = (acc[k]||0) + v; }
-          n++;
-        }
-        await new Promise(r=>requestAnimationFrame(r));
-      }
-      if (n){
-        for (const k of Object.keys(base)) if (acc[k] !== undefined) base[k] = acc[k]/n;
-        calibrated = true;
-        statusEl.textContent = 'Calibrated. Tracking…';
-      } else {
-        showErr('Calibration failed — ensure your face is visible and try again.');
-      }
-    }
-
-    function fusedLabel(c){
-      const d = {
-        browUp:   (c.browInnerUp + c.browOuterUp) - (base.browInnerUp + base.outerBrowUp),
-        browDown: (c.browDown - base.browDown),
-        eyesOpen: (c.eyesOpen - base.eyesOpen),
-        squint:   (c.eyeSquint - base.squint),
-        smile:    (c.smile - base.smile),
-        frown:    (c.frown - base.frown),
-        lipPress: (c.lipPress - base.lipPress),
-        cornerDown:(c.lipCornerDown - base.lipCornerDown),
-        jawOpen:   (c.jawOpen - base.jawOpen),
-        cheek:     (c.cheekRaise - base.cheekRaise)
-      };
-
-      const s = {
-        Surprised:  2.2*Math.max(0,d.browUp) + 1.8*Math.max(0,d.eyesOpen) + 1.2*Math.max(0,d.jawOpen),
-        Amused:     2.4*Math.max(0,d.smile)  + 1.4*Math.max(0,-d.squint) + 0.8*Math.max(0,d.cheek),
-        Angry:      1.8*Math.max(0,d.browDown)+1.6*Math.max(0,d.lipPress)+0.8*Math.max(0,d.cornerDown),
-        Sad:        1.6*Math.max(0,d.cornerDown),
-        Fearful:    1.2*Math.max(0,d.eyesOpen) + 0.6*Math.max(0,d.browUp),
-        Skeptical:  1.6*Math.max(0,d.browDown) + 0.8*Math.max(0,d.lipPress),
-        Determined: 1.2*Math.max(0,d.browDown) + 1.0*Math.max(0,d.lipPress),
-        Concerned:  1.4*Math.max(0,d.cornerDown) + 0.6*Math.max(0,d.browUp),
-        Relaxed:    0.8*Math.max(0, (base.squint - c.eyeSquint)) + 0.6*Math.max(0, (base.lipPress - c.lipPress))
-      };
-
-      let best='Neutral', bestVal=0;
-      for (const [k,v] of Object.entries(s)) if (v > bestVal){ best=k; bestVal=v; }
-      if (bestVal < 0.18) return 'Neutral';
-      return best;
-    }
-
-    function subtleText(c){
-      const cues = [];
-      if ((c.browInnerUp + c.browOuterUp) - (base.browInnerUp + base.outerBrowUp) > 0.12) cues.push('Brow ↑');
-      if (c.browDown - base.browDown > 0.10) cues.push('Brow ↓');
-      if (c.eyesOpen - base.eyesOpen > 0.15) cues.push('Eyes ↑');
-      if (c.eyeSquint - base.squint > 0.12) cues.push('Squint');
-      if (c.smile - base.smile > 0.12) cues.push('Smile');
-      if (c.lipPress - base.lipPress > 0.10) cues.push('Lip press');
-      if (c.lipCornerDown - base.lipCornerDown > 0.08) cues.push('Corners ↓');
-      if (c.jawOpen - base.jawOpen > 0.10) cues.push('Jaw open');
-      return cues;
-    }
-
-    function drawLandmarks(landmarks){
-      ctx.clearRect(0,0,canvas.width,canvas.height);
-      if (!landmarks?.length) return;
-      ctx.lineWidth = 2; ctx.fillStyle = "rgba(0,200,255,.9)";
-      for (const p of landmarks[0]) {
-        ctx.beginPath();
-        ctx.arc(p.x*canvas.width, p.y*canvas.height, 1.6, 0, Math.PI*2);
-        ctx.fill();
-      }
-    }
-
-    async function init(){
-      try{
-        statusEl.textContent = 'Loading model…';
-        await initMediapipe();
-        statusEl.textContent = 'Starting camera…';
-        await startCamera();
-
-        // Warmup + calibration
-        faceLandmarker.detectForVideo(video, performance.now());
-        await calibrate();
-
-        let frames = 0, mark = performance.now();
-        function loop(){
-          const now = performance.now();
-          const res = faceLandmarker.detectForVideo(video, now);
-
-          drawLandmarks(res?.faceLandmarks);
-          if (res?.faceBlendshapes?.length){
-            const m = toMap(res.faceBlendshapes[0]);
-            const c = cuesFromBlend(m);
-            const label = fusedLabel(c);
-            const EMOJI_MAP = {
-              Surprised:'😮', Amused:'😄', Angry:'😠', Sad:'😢', Fearful:'😨',
-              Skeptical:'🤨', Determined:'😤', Concerned:'😟', Relaxed:'🙂', Neutral:'😐'
-            };
-            chipMain.textContent = `${EMOJI_MAP[label] || '🙂'} ${label}`;
-            const cues = subtleText(c);
-            if (cues.length){ chipSubtle.style.display='block'; chipSubtle.textContent = 'Subtle: ' + cues.join(', '); }
-            else { chipSubtle.style.display='none'; }
-            statusEl.textContent = 'Tracking…';
-          } else {
-            chipSubtle.style.display='none';
-            statusEl.textContent = 'Face detected';
-          }
-
-          // FPS
-          frames++; if (now - mark > 1000){ fpsEl.textContent = frames + ' fps'; frames=0; mark=now; }
-          requestAnimationFrame(loop);
-        }
-        loop();
-      }catch(err){
-        showErr('Init error: ' + (err.message || err));
-      }
-    }
-
-    btnRecal.onclick = calibrate;
-    btnPerf.onclick = () => { highPerf = !highPerf; btnPerf.textContent='Performance: ' + (highPerf?'High':'Normal'); location.reload(); };
-
-    init();
-  </script>
+  // Exports
+  el('btnCSV').onclick = () => {
+    const csv = toCSV(stream);
+    download(`frames_${Date.now()}.csv`, csv, 'text/csv');
+  };
+  el('btnJSON').onclick = () => {
+    const [logoS, logoE] = parsePair(el('logoWin').value);
+    const [packS, packE] = parsePair(el('packWin').value);
+    const [ctaS,  ctaE ] = parsePair(el('ctaWin').value);
+    const roiLogo = parseQuad(el('logoRoi').value);
+    const roiPack = parseQuad(el('packRoi').value);
+    const roiCTA  = parseQuad(el('ctaRoi').value);
+    const KPIs = computeKPIs([logoS,logoE],[packS,packE],[ctaS,ctaE], roiLogo, roiPack, roiCTA);
+    const out = { meta:{ ts:Date.now(), ad: el('adUrl').value }, kpi: KPIs, frames: stream };
+    download(`report_${Date.now()}.json`, JSON.stringify(out,null,2), 'application/json');
+  };
+</script>
 </body>
 </html>
