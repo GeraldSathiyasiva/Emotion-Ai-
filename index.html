@@ -1,58 +1,87 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
-  <title>Emotion Recognition Ad Test</title>
-  <style>
-    body { font-family: sans-serif; text-align: center; }
-    video, canvas { border: 1px solid black; }
-  </style>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.18.0"></script>
-  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2"></script>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Emotion Ad Test — PR / AWR / PI</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin:16px; background:#0f1115; color:#fff; }
+  .row { display:flex; flex-wrap:wrap; gap:14px; align-items:flex-start; }
+  .panel { flex:1 1 360px; border:1px solid #222; border-radius:12px; padding:12px; background:#131722; }
+  label { display:block; font-weight:600; margin-top:10px; }
+  input[type="text"] { width:100%; padding:8px 10px; border-radius:8px; border:1px solid #333; background:#161a26; color:#fff; }
+  .btns { display:flex; gap:10px; align-items:center; margin-top:12px; flex-wrap:wrap; }
+  button { padding:10px 14px; border:0; border-radius:10px; background:#2a2f3d; color:#fff; cursor:pointer; }
+  button:disabled { opacity:.55; cursor:not-allowed; }
+  video, canvas { width:100%; border-radius:12px; background:#000; }
+  .kpi { display:flex; gap:10px; margin-top:10px; }
+  .kpi>div { flex:1 1 0; background:#101520; border:1px solid #222; border-radius:10px; padding:10px; text-align:center; }
+  .muted { color:#9aa3b2; font-size:12px; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.18.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 </head>
 <body>
-  <h1>Emotion Recognition Ad Test</h1>
-  <video id="video" width="720" height="560" autoplay muted></video>
-  <canvas id="overlay" width="720" height="560"></canvas>
 
-  <script>
-    const video = document.getElementById('video');
-    const overlay = document.getElementById('overlay');
-    const ctx = overlay.getContext('2d');
+<h2>Emotion Ad Test (Webcam, CV-only KPIs)</h2>
 
-    // Load models from the /models folder in your GitHub repo
-    Promise.all([
-      faceapi.nets.tinyFaceDetector.loadFromUri('./models'),
-      faceapi.nets.faceLandmark68Net.loadFromUri('./models'),
-      faceapi.nets.faceExpressionNet.loadFromUri('./models')
-    ]).then(startVideo).catch(err => console.error("Model loading error:", err));
+<div class="row">
+  <div class="panel" style="flex:1 1 560px;">
+    <label>Ad URL (MP4 / HTTPS or repo path like <code>ads/my_ad.mp4</code>)</label>
+    <input id="adUrl" type="text" placeholder="ads/my_ad.mp4" />
 
-    function startVideo() {
-      navigator.mediaDevices.getUserMedia({ video: {} })
-        .then(stream => {
-          video.srcObject = stream;
-        })
-        .catch(err => console.error("Camera error:", err));
-    }
+    <div class="row" style="gap:10px;">
+      <div class="panel" style="flex:1 1 260px;">
+        <b>Brand moment windows (seconds: start,end)</b>
+        <label>Logo</label> <input id="logoWin" type="text" value="5,7.5" />
+        <label>Packshot</label> <input id="packWin" type="text" value="10,12" />
+        <label>CTA</label> <input id="ctaWin" type="text" value="18,21" />
+        <div class="muted" style="margin-top:6px;">Rough timings are fine; refine later.</div>
+      </div>
+      <div class="panel" style="flex:1 1 260px;">
+        <b>Optional rough gaze ROIs (x,y,w,h in 0..1)</b>
+        <label>Logo ROI</label> <input id="logoRoi" type="text" value="0.78,0.08,0.18,0.12" />
+        <label>Pack ROI</label> <input id="packRoi" type="text" value="0.65,0.30,0.30,0.40" />
+        <label>CTA ROI</label> <input id="ctaRoi" type="text" value="0.72,0.80,0.22,0.14" />
+        <div class="muted">Uses head yaw/pitch as a rough proxy.</div>
+      </div>
+    </div>
 
-    video.addEventListener('play', () => {
-      const displaySize = { width: video.width, height: video.height };
-      faceapi.matchDimensions(overlay, displaySize);
+    <div class="btns">
+      <button id="btnLoadModels">1) Load models</button>
+      <button id="btnCam" disabled>2) Start webcam</button>
+      <button id="btnPlay" disabled>3) Play & analyze</button>
+      <button id="btnCSV" disabled>Download CSV</button>
+      <button id="btnJSON" disabled>Download JSON</button>
+      <span id="status" class="muted">—</span>
+    </div>
 
-      setInterval(async () => {
-        const detections = await faceapi.detectAllFaces(
-          video,
-          new faceapi.TinyFaceDetectorOptions()
-        ).withFaceLandmarks().withFaceExpressions();
+    <div class="row" style="margin-top:10px;">
+      <div style="flex:1 1 380px;">
+        <video id="ad" controls playsinline></video>
+      </div>
+      <div style="flex:1 1 220px;">
+        <video id="cam" autoplay muted playsinline style="width:100%;height:auto;"></video>
+        <canvas id="overlay" style="width:100%;height:auto;"></canvas>
+        <div class="muted" id="fps">— fps</div>
+      </div>
+    </div>
 
-        ctx.clearRect(0, 0, overlay.width, overlay.height);
+    <div class="kpi">
+      <div><div class="muted">Positive Recognition</div><div id="kPR">—</div></div>
+      <div><div class="muted">Awareness</div><div id="kAWR">—</div></div>
+      <div><div class="muted">Purchase Intention</div><div id="kPI">—</div></div>
+    </div>
+  </div>
 
-        const resizedDetections = faceapi.resizeResults(detections, displaySize);
-        faceapi.draw.drawDetections(overlay, resizedDetections);
-        faceapi.draw.drawFaceLandmarks(overlay, resizedDetections);
-        faceapi.draw.drawFaceExpressions(overlay, resizedDetections);
-      }, 100);
-    });
-  </script>
-</body>
-</html>
+  <div class="panel" style="flex:1 1 320px;">
+    <b>How it works</b>
+    <ul class="muted">
+      <li>Samples webcam ~6–7 Hz while the ad plays.</li>
+      <li>Computes attention (eyes open), valence (happy vs negative), arousal (activation), rough gaze, head jitter.</li>
+      <li>Compares response vs baseline around Logo/Pack/CTA windows.</li>
+      <li>Outputs PR / AWR / PI (0–100) + CSV/JSON.</li>
+    </ul>
+  </div>
+</div>
