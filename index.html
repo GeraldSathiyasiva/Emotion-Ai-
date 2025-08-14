@@ -18,13 +18,18 @@
   .kpi { display:flex; gap:10px; margin-top:10px; }
   .kpi>div { flex:1 1 0; background:#101520; border:1px solid #222; border-radius:10px; padding:10px; text-align:center; }
   .muted { color:#9aa3b2; font-size:12px; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:8px; font-size:12px; background:#2a2f3d; margin-left:8px; }
+  .ok { background:#14532d; }
+  .warn { background:#7c2d12; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.18.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 </head>
 <body>
 
-<h2>Emotion Ad Test (Webcam, CV-only KPIs)</h2>
+<h2>Emotion Ad Test (Webcam, CV-only KPIs)
+  <span id="samplestate" class="badge warn">IDLE</span>
+</h2>
 
 <div class="row">
   <div class="panel" style="flex:1 1 560px;">
@@ -69,18 +74,16 @@
   <div class="panel" style="flex:1 1 320px;">
     <b>How it works</b>
     <ul class="muted">
-      <li>Samples webcam ~6–7 Hz while the ad plays.</li>
-      <li>Computes attention (eyes open), valence (happy vs negative), arousal (activation), head jitter.</li>
-      <li>Compares response vs baseline around Logo/Pack/CTA windows.</li>
-      <li>Outputs PR / AWR / PI (0–100) + CSV/JSON.</li>
+      <li>Click Load models → Start webcam → enter Ad URL → Play & analyze.</li>
+      <li>“Sampling” badge turns green when the loop is running; the status shows sample count.</li>
+      <li>Good lighting helps detection; remove glasses for the first test.</li>
     </ul>
   </div>
 </div>
 
 <!-- ===== Diagnostics + Model Loader (robust for GitHub Pages subpath) ===== -->
 <script>
-  // Adjust this to your repo name (with leading/trailing slashes)
-  const REPO_SUBPATH = '/Emotion-Ai-/';
+  const REPO_SUBPATH = '/Emotion-Ai-/'; // adjust if your repo path is different
   const onGhPages = location.hostname.endsWith('github.io') && location.pathname.startsWith(REPO_SUBPATH);
   const MODEL_URL = onGhPages ? REPO_SUBPATH + 'models' : './models';
 
@@ -103,13 +106,13 @@
   // ====== DOM ======
   const $ = id => document.getElementById(id);
   const ad = $('ad'), cam = $('cam'), canv = $('overlay'), ctx = canv.getContext('2d');
-  const kPR = $('kPR'), kAWR = $('kAWR'), kPI = $('kPI'), statusEl = $('status'), fpsEl = $('fps');
+  const kPR = $('kPR'), kAWR = $('kAWR'), kPI = $('kPI'), statusEl = $('status'), fpsEl = $('fps'), badge=$('samplestate');
 
   // ====== State ======
   let samplingTimer=null, framesCount=0, fpsT0=performance.now();
   const stream=[];   // {t, att, val, aro, pos, neg, gazeX, gazeY, jitter, face}
   let lastNose=null;
-  let webcamReady=false;
+  let startedAtMs=null;
 
   // ====== Utils ======
   const clamp=(x,a,b)=>Math.min(b,Math.max(a,x));
@@ -118,6 +121,11 @@
   const stdev=a=>{ if(!a.length) return 0; const m=mean(a); return Math.sqrt(a.reduce((s,x)=>s+(x-m)*(x-m),0)/a.length); };
   const sigmoid=x=>1/(1+Math.exp(-x));
   const parsePair = s => { const [a,b]=(s||'').split(',').map(Number); return [Number(a||0),Number(b||0)]; }
+
+  function setBadge(active){
+    badge.textContent = active ? 'SAMPLING' : 'IDLE';
+    badge.className = 'badge ' + (active ? 'ok' : 'warn');
+  }
 
   // ====== Face feature helpers ======
   function eyeAspectRatio(p, ids){
@@ -173,23 +181,19 @@
   function engagementIndexSimple(t0, dur){
     const eyes = windowStats(t0, t0+dur, 'att').mean;
     const jit = stdev(windowSlice(t0, t0+dur).map(r=>r.jitter));
-    // higher is better: eyes; lower is better: jitter
-    const jitterN = Math.max(0, 1 - (jit/2.0)); // simple normalization
+    const jitterN = Math.max(0, 1 - (jit/2.0));
     return 0.7*eyes + 0.3*jitterN;
   }
   function computeKPIs(winLogo, winPack, winCTA){
     const tLogo = winLogo[0], tPack = winPack[0], tCTA = winCTA[0];
-
     const dV_logo = deltaFeature(tLogo, 'val');
     const dV_pack = deltaFeature(tPack, 'val');
     const smile_logo_peak = windowStats(tLogo, tLogo+RESP_DUR, 'pos').peak;
     const neg_logo_peak   = windowStats(tLogo, tLogo+RESP_DUR, 'neg').peak;
 
-    // global baseline for z-like scaling
     const baseAll = windowStats(0, Math.max(0.1, tLogo), 'val');
     const z = (x, m=baseAll.mean, s=0.25)=> s>1e-6 ? (x-m)/s : 0;
 
-    // PR: remove gaze term
     const PR = 100/(1+Math.exp(-(
       0.95*z(dV_logo.dMean) +
       0.55*z(dV_pack.dMean) +
@@ -197,11 +201,9 @@
       0.45*z(neg_logo_peak, 0.1, 0.2)
     )));
 
-    // AWR: use arousal delta at logo only (no dwell/latency)
     const dA_logo = deltaFeature(tLogo, 'aro').dMean;
     const AWR = 100/(1+Math.exp(-( 0.9*z(dA_logo) )));
 
-    // PI: engagement via eyes + jitter only (no CTA dwell)
     const wCTA = windowStats(tCTA, tCTA+Math.max(2.5, RESP_DUR), 'val');
     const v_cta = wCTA.mean;
     const v_cta_pk = wCTA.peak;
@@ -214,7 +216,6 @@
       0.35*z(v_cta_pk,0.15,0.2) -
       0.55*z(neg_cta, 0.1, 0.2)
     )));
-
     return { PR:+PR.toFixed(1), AWR:+AWR.toFixed(1), PI:+PI.toFixed(1) };
   }
 
@@ -233,21 +234,18 @@
   }
 
   // ====== Load models with probe ======
-  document.getElementById('btnLoadModels').addEventListener('click', async () => {
+  $('btnLoadModels').addEventListener('click', async () => {
     try {
       log('Checking model path…');
       await probeModel(MODEL_URL, 'tiny_face_detector_model-weights_manifest.json');
       log('Loading TinyFaceDetector…');
       await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-
       log('Loading FaceLandmark68…');
       await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
-
       log('Loading FaceExpression…');
       await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
-
       log('Models loaded ✔  Start webcam next.');
-      document.getElementById('btnCam').disabled = false;
+      $('btnCam').disabled = false;
     } catch (e) {
       console.error('Model load error:', e);
       alert(`Model load FAILED:\n${e.message}\nOpen DevTools → Console for the exact URL.`);
@@ -256,19 +254,24 @@
     }
   });
 
-  // ====== Start webcam (wait for metadata so sizes are valid) ======
-  document.getElementById('btnCam').addEventListener('click', async () => {
+  // ====== Start webcam (make ready immediately; set safe canvas size) ======
+  $('btnCam').addEventListener('click', async () => {
     try{
       const st = await navigator.mediaDevices.getUserMedia({ video:{facingMode:'user', width:{ideal:640}, height:{ideal:480}}, audio:false });
       cam.srcObject = st;
+      await cam.play(); // ensure playing attempts
+      // Safe defaults; update once metadata arrives
+      canv.width = cam.videoWidth || 640;
+      canv.height = cam.videoHeight || 480;
       cam.addEventListener('loadedmetadata', () => {
-        cam.play();
-        canv.width = cam.videoWidth || 640;
-        canv.height = cam.videoHeight || 480;
-        webcamReady = true;
-        log(`Webcam ready ${canv.width}x${canv.height}. Enter Ad URL and press Play & analyze.`);
-        document.getElementById('btnPlay').disabled = false;
-      }, { once:true });
+        canv.width = cam.videoWidth || canv.width;
+        canv.height = cam.videoHeight || canv.height;
+      });
+      log(`Webcam ready ${canv.width}x${canv.height}. You can start analyzing.`);
+      $('btnPlay').disabled = false;
+
+      // START SAMPLING RIGHT AWAY (key change)
+      startSampling();
     }catch(e){
       log('Camera error:', e.message);
     }
@@ -277,8 +280,10 @@
   // ====== Sampling loop ======
   async function sampleOnce(){
     try{
-      if (!webcamReady || !cam.videoWidth) return;
-      const tNow = isFinite(ad.currentTime) ? +ad.currentTime.toFixed(3) : 0;
+      // Time source: ad time if available, else elapsed since sampling started
+      const tNow = (isFinite(ad.currentTime) && ad.currentTime>0)
+        ? +ad.currentTime.toFixed(3)
+        : (startedAtMs ? ((performance.now()-startedAtMs)/1000).toFixed(3) : 0);
 
       const det = await faceapi
         .detectSingleFace(cam, new faceapi.TinyFaceDetectorOptions({inputSize:320, scoreThreshold:0.3}))
@@ -299,73 +304,69 @@
         const pos = (e.happy||0);
         const neg = (e.angry||0)+(e.sad||0)+(e.disgusted||0);
 
-        stream.push({ t:tNow, att, val, aro, pos, neg, gazeX:feats.gazeX, gazeY:feats.gazeY, jitter:feats.jitter, face:1 });
+        stream.push({ t:+tNow, att, val, aro, pos, neg, gazeX:feats.gazeX, gazeY:feats.gazeY, jitter:feats.jitter, face:1 });
       } else {
-        stream.push({ t:tNow, att:0, val:0, aro:0, pos:0, neg:0, gazeX:0.5, gazeY:0.5, jitter:0, face:0 });
+        stream.push({ t:+tNow, att:0, val:0, aro:0, pos:0, neg:0, gazeX:0.5, gazeY:0.5, jitter:0, face:0 });
       }
 
       // FPS + sample counter
       framesCount++; const now = performance.now();
-      if (now - fpsT0 > 1000){ fpsEl.textContent = framesCount + ' fps'; framesCount=0; fpsT0 = now; }
+      if (now - fpsT0 > 1000){ $('fps').textContent = framesCount + ' fps'; framesCount=0; fpsT0 = now; }
       statusEl.textContent = `Recording… samples: ${stream.length}`;
     }catch(e){
       console.debug('sampleOnce error', e);
     }
   }
-  function startSampling(){ stream.length = 0; lastNose = null; if (!samplingTimer) samplingTimer = setInterval(sampleOnce, SAMPLE_MS); }
-  function stopSampling(){ if (samplingTimer) clearInterval(samplingTimer); samplingTimer = null; }
+  function startSampling(){
+    stream.length = 0; lastNose = null;
+    startedAtMs = performance.now();
+    if (!samplingTimer){
+      samplingTimer = setInterval(sampleOnce, SAMPLE_MS);
+      setBadge(true);
+    }
+  }
+  function stopSampling(){ if (samplingTimer){ clearInterval(samplingTimer); samplingTimer=null; setBadge(false);} }
 
-  // ====== Play & Analyze with fallbacks ======
-  document.getElementById('btnPlay').addEventListener('click', async () => {
-    const url = document.getElementById('adUrl').value.trim();
+  // ====== Play & Analyze (sampling already running) ======
+  $('btnPlay').addEventListener('click', async () => {
+    const url = $('adUrl').value.trim();
     if (!url){ log('Enter a valid Ad URL (e.g., ads/my_ad.mp4)'); return; }
 
     ad.src = url;
-
-    // start sampling immediately; will use t=0 until playing
-    startSampling();
-
-    ad.onplaying = () => { startSampling(); log('Recording…'); };
-    ad.onpause   = () => { log('Paused'); };
-    ad.onended   = () => { stopSampling(); log('Analyzing…'); analyzeAndShow(); };
-
     try { await ad.play(); }
     catch(e) { log('Click the video to start playback (autoplay blocked)'); }
 
-    // watchdog kick
-    setTimeout(() => {
-      if (stream.length === 0) { startSampling(); log('Recording…'); }
-    }, 1500);
+    ad.onpause = () => { log('Paused'); };
+    ad.onended = () => { stopSampling(); log('Analyzing…'); analyzeAndShow(); };
   });
 
   function analyzeAndShow(){
     if (!stream.length){ log('No samples captured.'); return; }
 
-    const [logoS, logoE] = parsePair(document.getElementById('logoWin').value);
-    const [packS, packE] = parsePair(document.getElementById('packWin').value);
-    const [ctaS,  ctaE ] = parsePair(document.getElementById('ctaWin').value);
+    const [logoS, logoE] = parsePair($('logoWin').value);
+    const [packS, packE] = parsePair($('packWin').value);
+    const [ctaS,  ctaE ] = parsePair($('ctaWin').value);
 
     const KPIs = computeKPIs([logoS,logoE],[packS,packE],[ctaS,ctaE]);
-    document.getElementById('kPR').textContent  = KPIs.PR.toString();
-    document.getElementById('kAWR').textContent = KPIs.AWR.toString();
-    document.getElementById('kPI').textContent  = KPIs.PI.toString();
+    $('kPR').textContent  = KPIs.PR.toString();
+    $('kAWR').textContent = KPIs.AWR.toString();
+    $('kPI').textContent  = KPIs.PI.toString();
 
     log('Done. Export results below.');
-    document.getElementById('btnCSV').disabled = false;
-    document.getElementById('btnJSON').disabled = false;
+    $('btnCSV').disabled = false; $('btnJSON').disabled = false;
   }
 
   // Exports
-  document.getElementById('btnCSV').addEventListener('click', () => {
+  $('btnCSV').addEventListener('click', () => {
     const csv = toCSV(stream);
     download(`frames_${Date.now()}.csv`, csv, 'text/csv');
   });
-  document.getElementById('btnJSON').addEventListener('click', () => {
-    const [logoS, logoE] = parsePair(document.getElementById('logoWin').value);
-    const [packS, packE] = parsePair(document.getElementById('packWin').value);
-    const [ctaS,  ctaE ] = parsePair(document.getElementById('ctaWin').value);
+  $('btnJSON').addEventListener('click', () => {
+    const [logoS, logoE] = parsePair($('logoWin').value);
+    const [packS, packE] = parsePair($('packWin').value);
+    const [ctaS,  ctaE ] = parsePair($('ctaWin').value);
     const KPIs = computeKPIs([logoS,logoE],[packS,packE],[ctaS,ctaE]);
-    const out = { meta:{ ts:Date.now(), ad:document.getElementById('adUrl').value }, kpi: KPIs, frames: stream };
+    const out = { meta:{ ts:Date.now(), ad:$('adUrl').value }, kpi: KPIs, frames: stream };
     download(`report_${Date.now()}.json`, JSON.stringify(out,null,2), 'application/json');
   });
 </script>
