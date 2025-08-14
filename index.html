@@ -1,29 +1,29 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Emotion Ad Test — PR / AWR / PI · v4.0</title>
-  <style>
-    :root { color-scheme: dark; }
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin:16px; background:#0f1115; color:#fff; }
-    .row { display:flex; flex-wrap:wrap; gap:14px; align-items:flex-start; }
-    .panel { flex:1 1 360px; border:1px solid #222; border-radius:12px; padding:12px; background:#131722; }
-    label { display:block; font-weight:600; margin-top:10px; }
-    input[type="text"] { width:100%; padding:8px 10px; border-radius:8px; border:1px solid #333; background:#161a26; color:#fff; }
-    .btns { display:flex; gap:10px; align-items:center; margin-top:12px; flex-wrap:wrap; position:relative; z-index:5; }
-    button { padding:10px 14px; border:0; border-radius:10px; background:#2a2f3d; color:#fff; cursor:pointer; }
-    button:disabled { opacity:.55; cursor:not-allowed; }
-    video, canvas { width:100%; border-radius:12px; background:#000; }
-    .kpi { display:flex; gap:10px; margin-top:10px; }
-    .kpi>div { flex:1 1 0; background:#101520; border:1px solid #222; border-radius:10px; padding:10px; text-align:center; }
-    .muted { color:#9aa3b2; font-size:12px; }
-    .badge { display:inline-block; padding:2px 8px; border-radius:8px; font-size:12px; background:#7c2d12; margin-left:8px; }
-    .ok { background:#14532d; }
-    #diag { font:12px/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space:pre-wrap; margin-top:8px; color:#cbd5e1; }
-  </style>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.18.0/dist/tf.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Emotion Ad Test — PR / AWR / PI · v4.1</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin:16px; background:#0f1115; color:#fff; }
+  .row { display:flex; flex-wrap:wrap; gap:14px; align-items:flex-start; }
+  .panel { flex:1 1 360px; border:1px solid #222; border-radius:12px; padding:12px; background:#131722; }
+  label { display:block; font-weight:600; margin-top:10px; }
+  input[type="text"] { width:100%; padding:8px 10px; border-radius:8px; border:1px solid #333; background:#161a26; color:#fff; }
+  .btns { display:flex; gap:10px; align-items:center; margin-top:12px; flex-wrap:wrap; }
+  button { padding:10px 14px; border:0; border-radius:10px; background:#2a2f3d; color:#fff; cursor:pointer; }
+  button:disabled { opacity:.55; cursor:not-allowed; }
+  video, canvas { width:100%; border-radius:12px; background:#000; }
+  .kpi { display:flex; gap:10px; margin-top:10px; }
+  .kpi>div { flex:1 1 0; background:#101520; border:1px solid #222; border-radius:10px; padding:10px; text-align:center; }
+  .muted { color:#9aa3b2; font-size:12px; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:8px; font-size:12px; background:#7c2d12; margin-left:8px; }
+  .ok { background:#14532d; }
+  #diag { font:12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space:pre-wrap; color:#cbd5e1; margin-top:8px; max-height:220px; overflow:auto; border:1px solid #222; border-radius:8px; padding:8px; background:#0d1220; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.18.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 </head>
 <body>
 
@@ -45,20 +45,18 @@
     </div>
 
     <div class="btns">
-      <button id="btnLoadModels">1) Load models</button>
-      <button id="btnCam" disabled>2) Start webcam</button>
-      <button id="btnPlay" disabled>3) Play & analyze</button>
+      <button id="btnPlay" disabled>Play & analyze</button>
       <button id="btnTest" disabled>Quick webcam test (10s)</button>
       <button id="btnCSV" disabled>Download CSV</button>
       <button id="btnJSON" disabled>Download JSON</button>
-      <span id="status" class="muted">—</span>
+      <span id="status" class="muted">Booting…</span>
     </div>
 
     <div class="row" style="margin-top:10px;">
-      <div style="flex:1 1 380px; position:relative; z-index:1;">
+      <div style="flex:1 1 380px;">
         <video id="ad" controls playsinline></video>
       </div>
-      <div style="flex:1 1 220px; position:relative; z-index:1;">
+      <div style="flex:1 1 220px; position:relative;">
         <video id="cam" autoplay muted playsinline style="width:100%;height:auto;"></video>
         <canvas id="overlay" style="width:100%;height:auto;"></canvas>
         <div class="muted" id="fps">— fps</div>
@@ -71,70 +69,46 @@
       <div><div class="muted">Purchase Intention</div><div id="kPI">—</div></div>
     </div>
 
-    <div id="diag"></div>
+    <div id="diag">DIAG:\n</div>
   </div>
 
   <div class="panel" style="flex:1 1 320px;">
-    <b>How it works</b>
+    <b>Notes</b>
     <ul class="muted">
-      <li>Click Load models → Start webcam → enter Ad URL → Play & analyze.</li>
-      <li>Use “Quick webcam test (10s)” to verify face capture w/o an ad.</li>
-      <li>Export CSV/JSON after the ad ends.</li>
+      <li>Models auto-load from <code>/Emotion-Ai-/models</code>. If a file is missing you’ll see a 404 below.</li>
+      <li>After models load, webcam & sampling start automatically.</li>
+      <li>Use Quick test (10s) to verify capture; then play your ad.</li>
     </ul>
   </div>
 </div>
 
 <script>
-  // -------- Robust MODEL path (auto-detects GitHub Pages subpath) --------
-  function inferRepoBase() {
-    if (location.hostname.endsWith('github.io')) {
-      const seg = location.pathname.split('/').filter(Boolean)[0] || '';
-      return seg ? `/${seg}/` : '/';
-    }
-    return './';
-  }
-  const BASE = inferRepoBase();
-  const MODEL_URL = (location.hostname.endsWith('github.io') ? BASE : './') + 'models';
+  // ----- HARD-CODED MODEL PATH FOR YOUR REPO -----
+  const MODEL_URL = '/Emotion-Ai-/models'; // your GitHub Pages path
 
+  // ----- DOM / helpers -----
   const $ = id => document.getElementById(id);
-  const log = (...a) => { console.log(...a); const s=$('status'); if(s) s.textContent = a.join(' '); };
-  const diag = (...a) => { console.log('[diag]', ...a); const d=$('diag'); if(d){ d.textContent += a.join(' ') + '\n'; } };
-
-  async function probeModel(url, file) {
-    const full = `${url.replace(/\/$/,'')}/${file}`;
-    log('Probing', full, '…');
-    const r = await fetch(full, { cache: 'no-store' });
-    if (!r.ok) throw new Error(`Probe failed ${r.status} for ${full}`);
-    diag('OK:', full);
-    return full;
-  }
-</script>
-
-<script>
-  // -------- Config --------
-  const SAMPLE_MS = 150;           // ~6–7 Hz
-  const BASELINE_PRE = [2.0, 0.5]; // baseline window [te-2.0, te-0.5]
-  const RESP_DUR = 2.0;            // response window [te, te+2.0]
-
-  // -------- DOM --------
   const ad = $('ad'), cam = $('cam'), canv = $('overlay'), ctx = canv.getContext('2d');
   const kPR = $('kPR'), kAWR = $('kAWR'), kPI = $('kPI'), statusEl = $('status'), fpsEl = $('fps'), badge=$('samplestate');
+  const diagEl = $('diag');
+  const log = (...a)=>{ console.log(...a); statusEl.textContent = a.join(' '); };
+  const diag = (...a)=>{ console.log('[diag]', ...a); diagEl.textContent += a.join(' ') + '\n'; };
 
-  // -------- State --------
-  let samplingTimer=null, framesCount=0, fpsT0=performance.now();
-  const stream=[];   // rows: {t, att, val, aro, pos, neg, gazeX, gazeY, jitter, face}
-  let lastNose=null, startedAtMs=null, webcamReady=false, modelsReady=false;
+  // Global state
+  let modelsReady=false, webcamReady=false, samplingTimer=null, startedAtMs=null, framesCount=0, fpsT0=performance.now();
+  const stream=[]; let lastNose=null;
 
-  // -------- Utils --------
+  // Utils
   const clamp=(x,a,b)=>Math.min(b,Math.max(a,x));
   const mean=a=>a.length?a.reduce((x,y)=>x+y,0)/a.length:0;
   const peak=a=>a.length?Math.max(...a):0;
   const stdev=a=>{ if(!a.length) return 0; const m=mean(a); return Math.sqrt(a.reduce((s,x)=>s+(x-m)*(x-m),0)/a.length); };
   const sigmoid=x=>1/(1+Math.exp(-x));
-  const parsePair = s => { const [a,b]=(s||'').split(',').map(Number); return [Number(a||0),Number(b||0)]; }
-  function setBadge(active){ badge.textContent = active ? 'SAMPLING' : 'IDLE'; badge.className = 'badge ' + (active ? 'ok' : ''); }
+  const parsePair = s => { const [a,b]=(s||'').split(',').map(Number); return [Number(a||0),Number(b||0)]; };
 
-  // -------- Feature helpers --------
+  function setBadge(active){ badge.textContent = active ? 'SAMPLING' : 'IDLE'; badge.className = 'badge ' + (active?'ok':''); }
+
+  // Feature helpers
   function eyeAspectRatio(p, ids){
     const v = (p[ids[1]].y - p[ids[5]].y + p[ids[2]].y - p[ids[4]].y)/2;
     const h = (p[ids[3]].x - p[ids[0]].x);
@@ -156,7 +130,6 @@
 
     let jitter=0; if (lastNose) jitter=Math.hypot(nose.x-lastNose.x, nose.y-lastNose.y);
     lastNose = {x:nose.x,y:nose.y};
-
     return { eyesOpen, gazeX, gazeY, jitter };
   }
   function valenceFromExpr(e){
@@ -169,7 +142,8 @@
   }
   const attentionScore = eyesOpen => clamp(eyesOpen,0,1);
 
-  // -------- Windows / deltas --------
+  // Windows/deltas
+  const SAMPLE_MS = 150, BASELINE_PRE=[2.0,0.5], RESP_DUR=2.0;
   function windowSlice(t0,t1){ return stream.filter(r=>r.t>=t0 && r.t<t1); }
   function windowStats(t0,t1,key){
     const rows = windowSlice(t0,t1);
@@ -183,7 +157,7 @@
     return { dMean: resp.mean - base.mean, dPeak: resp.peak - base.peak, base, resp };
   }
 
-  // -------- KPI scoring (no ROI) --------
+  // KPI (ROI-free)
   function engagementIndexSimple(t0, dur){
     const eyes = windowStats(t0, t0+dur, 'att').mean;
     const jit = stdev(windowSlice(t0, t0+dur).map(r=>r.jitter));
@@ -192,7 +166,6 @@
   }
   function computeKPIs(winLogo, winPack, winCTA){
     const tLogo = winLogo[0], tPack = winPack[0], tCTA = winCTA[0];
-
     const dV_logo = deltaFeature(tLogo, 'val');
     const dV_pack = deltaFeature(tPack, 'val');
     const smile_logo_peak = windowStats(tLogo, tLogo+RESP_DUR, 'pos').peak;
@@ -207,15 +180,12 @@
       0.45*z(smile_logo_peak, 0.15, 0.2) -
       0.45*z(neg_logo_peak, 0.1, 0.2)
     )));
-
     const dA_logo = deltaFeature(tLogo, 'aro').dMean;
     const AWR = 100/(1+Math.exp(-( 0.9*z(dA_logo) )));
-
     const wCTA = windowStats(tCTA, tCTA+Math.max(2.5, RESP_DUR), 'val');
     const v_cta = wCTA.mean, v_cta_pk = wCTA.peak;
     const eng_cta = engagementIndexSimple(tCTA, Math.max(2.5, RESP_DUR));
     const neg_cta = windowStats(tCTA, tCTA+Math.max(2.5, RESP_DUR), 'neg').peak;
-
     const PI = 100/(1+Math.exp(-(
       0.85*z(v_cta,  0, 0.3) +
       0.55*z(eng_cta, 0.3, 0.25) +
@@ -225,7 +195,7 @@
     return { PR:+PR.toFixed(1), AWR:+AWR.toFixed(1), PI:+PI.toFixed(1) };
   }
 
-  // -------- CSV/JSON export --------
+  // Export
   function toCSV(rows){
     const header = ['t','att','val','aro','pos','neg','gazeX','gazeY','jitter','face'];
     const lines = [header.join(',')];
@@ -239,47 +209,54 @@
     URL.revokeObjectURL(a.href);
   }
 
-  // -------- Load models --------
-  $('btnLoadModels').addEventListener('click', async () => {
-    try {
-      diag('BASE:', BASE, 'MODEL_URL:', MODEL_URL);
-      await probeModel(MODEL_URL, 'tiny_face_detector_model-weights_manifest.json');
-      log('Loading TinyFaceDetector…'); await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-      log('Loading FaceLandmark68…');   await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
-      log('Loading FaceExpression…');   await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
-      modelsReady = true;
-      log('Models loaded ✔  Start webcam next.');
-      $('btnCam').disabled = false;
-    } catch (e) {
-      console.error('Model load error:', e);
-      alert(`Model load FAILED:\n${e.message}\n(Open DevTools → Console)`);
-      log('Model load FAILED.');
-    }
-  });
-
-  // -------- Webcam (starts sampling immediately) --------
-  $('btnCam').addEventListener('click', async () => {
+  // Model probe + load (AUTO on page load)
+  async function probe(file){
+    const full = `${MODEL_URL}/${file}`;
+    diag('Probing', full);
+    const r = await fetch(full, { cache:'no-store' });
+    if(!r.ok) throw new Error(`PROBE ${r.status}: ${full}`);
+    return full;
+  }
+  async function loadModels(){
     try{
-      const st = await navigator.mediaDevices.getUserMedia({ video:{facingMode:'user', width:{ideal:640}, height:{ideal:480}}, audio:false });
-      cam.srcObject = st;
-      await cam.play();
-      canv.width = cam.videoWidth || 640; canv.height = cam.videoHeight || 480;
-      cam.addEventListener('loadedmetadata', () => {
-        canv.width = cam.videoWidth || canv.width;
-        canv.height = cam.videoHeight || canv.height;
-      });
-      webcamReady = true;
-      log(`Webcam ready ${canv.width}x${canv.height}.`);
+      log('Probing model files…');
+      await probe('tiny_face_detector_model-weights_manifest.json');
+      await probe('face_landmark_68_model-weights_manifest.json');
+      await probe('face_expression_model-weights_manifest.json');
+
+      log('Loading models…');
+      await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+      await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+      await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
+
+      modelsReady = true;
+      log('Models loaded ✔ Starting webcam…');
+      await startWebcam();
+      startSampling();
       $('btnPlay').disabled = false;
       $('btnTest').disabled = false;
-      startSampling(); // start now so we always capture
     }catch(e){
-      log('Camera error:', e.message);
+      console.error(e);
+      log('Model load FAILED');
+      diag('ERROR:', e.message);
+      alert(`Model load FAILED:\n${e.message}\nCheck DIAG box for the exact URL.`);
     }
-  });
+  }
 
-  // -------- Sampling loop --------
-  let samplingFpsCount=0, fpsT0=performance.now();
+  // Webcam + sampling
+  async function startWebcam(){
+    const st = await navigator.mediaDevices.getUserMedia({ video:{facingMode:'user', width:{ideal:640}, height:{ideal:480}}, audio:false });
+    cam.srcObject = st;
+    await cam.play();
+    canv.width = cam.videoWidth || 640; canv.height = cam.videoHeight || 480;
+    cam.addEventListener('loadedmetadata', () => {
+      canv.width = cam.videoWidth || canv.width;
+      canv.height = cam.videoHeight || canv.height;
+    });
+    webcamReady = true;
+    log(`Webcam ready ${canv.width}x${canv.height}.`);
+  }
+
   async function sampleOnce(){
     try{
       const tNow = (isFinite(ad.currentTime) && ad.currentTime>0)
@@ -292,7 +269,7 @@
             .withFaceLandmarks().withFaceExpressions()
         : null;
 
-      // Draw preview (so overlay isn't black)
+      // draw preview so canvas isn’t black
       ctx.clearRect(0,0,canv.width,canv.height);
       ctx.drawImage(cam, 0, 0, canv.width, canv.height);
 
@@ -310,68 +287,54 @@
         const neg = (e.angry||0)+(e.sad||0)+(e.disgusted||0);
 
         stream.push({ t:+tNow, att, val, aro, pos, neg, gazeX:feats.gazeX, gazeY:feats.gazeY, jitter:feats.jitter, face:1 });
-        ctx.fillStyle = 'rgba(0,128,0,0.6)'; ctx.fillRect(8,8,120,22);
-        ctx.fillStyle = '#fff'; ctx.font = '12px ui-monospace'; ctx.fillText('FACE: yes', 14, 24);
       } else {
-        // still push a row so we never get "no samples"
+        // push placeholder so we never end up with 0 samples
         stream.push({ t:+tNow, att:0, val:0, aro:0, pos:0, neg:0, gazeX:0.5, gazeY:0.5, jitter:0, face:0 });
-        ctx.fillStyle = 'rgba(128,0,0,0.6)'; ctx.fillRect(8,8,120,22);
-        ctx.fillStyle = '#fff'; ctx.font = '12px ui-monospace'; ctx.fillText('FACE: no', 14, 24);
       }
 
-      // FPS + sample counter
-      samplingFpsCount++; const now = performance.now();
-      if (now - fpsT0 > 1000){ $('fps').textContent = samplingFpsCount + ' fps'; samplingFpsCount=0; fpsT0 = now; }
+      framesCount++; const now = performance.now();
+      if (now - fpsT0 > 1000){ $('fps').textContent = framesCount + ' fps'; framesCount=0; fpsT0 = now; }
+      $('samplestate').textContent = 'SAMPLING'; $('samplestate').className = 'badge ok';
       statusEl.textContent = `Recording… samples: ${stream.length}`;
     }catch(e){
-      console.debug('sampleOnce error', e);
       diag('sampleOnce error:', e.message);
     }
   }
-  function startSampling(){
-    stream.length = 0; lastNose = null; startedAtMs = performance.now();
-    if (!samplingTimer){ samplingTimer = setInterval(sampleOnce, SAMPLE_MS); setBadge(true); diag('Sampling started'); }
-  }
-  function stopSampling(){ if (samplingTimer){ clearInterval(samplingTimer); samplingTimer=null; setBadge(false); diag('Sampling stopped'); } }
+  function startSampling(){ stream.length=0; lastNose=null; startedAtMs=performance.now(); if(!samplingTimer) samplingTimer=setInterval(sampleOnce, 150); }
+  function stopSampling(){ if(samplingTimer){ clearInterval(samplingTimer); samplingTimer=null; $('samplestate').textContent='IDLE'; $('samplestate').className='badge'; } }
 
-  // -------- Quick Webcam Test (10s) --------
-  $('btnTest').addEventListener('click', async () => {
-    if (!webcamReady){ log('Start webcam first'); return; }
-    log('Testing webcam capture for ~10s…');
+  // Quick webcam test
+  $('btnTest').addEventListener('click', () => {
+    if (!webcamReady) return alert('Start webcam first (it starts automatically after models load).');
     stream.length = 0;
     const t0 = performance.now();
     const iv = setInterval(()=>{ statusEl.textContent = `Testing… samples: ${stream.length}`; }, 250);
     setTimeout(()=>{ clearInterval(iv); log(`Test done. Samples: ${stream.length}`); }, 10500);
   });
 
-  // -------- Play & Analyze --------
+  // Play & analyze
   $('btnPlay').addEventListener('click', async () => {
     const url = $('adUrl').value.trim();
-    if (!url){ log('Enter a valid Ad URL (e.g., ads/my_ad.mp4)'); return; }
-
+    if (!url) return log('Enter a valid Ad URL (e.g., ads/my_ad.mp4)');
     ad.src = url;
     try { await ad.play(); } catch(e) { log('Click the video to start playback (autoplay blocked)'); }
-    ad.onpause = () => { log('Paused'); };
+    ad.onpause = () => log('Paused');
     ad.onended = () => { stopSampling(); log('Analyzing…'); analyzeAndShow(); };
   });
 
   function analyzeAndShow(){
     if (!stream.length){ log('No samples captured.'); return; }
-
     const [logoS, logoE] = parsePair($('logoWin').value);
     const [packS, packE] = parsePair($('packWin').value);
     const [ctaS,  ctaE ] = parsePair($('ctaWin').value);
-
     const KPIs = computeKPIs([logoS,logoE],[packS,packE],[ctaS,ctaE]);
     $('kPR').textContent  = KPIs.PR.toString();
     $('kAWR').textContent = KPIs.AWR.toString();
     $('kPI').textContent  = KPIs.PI.toString();
-
     log('Done. Export results below.');
     $('btnCSV').disabled = false; $('btnJSON').disabled = false;
   }
 
-  // -------- Exports --------
   $('btnCSV').addEventListener('click', () => {
     const csv = toCSV(stream);
     download(`frames_${Date.now()}.csv`, csv, 'text/csv');
@@ -384,6 +347,15 @@
     const out = { meta:{ ts:Date.now(), ad:$('adUrl').value }, kpi: KPIs, frames: stream };
     download(`report_${Date.now()}.json`, JSON.stringify(out,null,2), 'application/json');
   });
+
+  // Global error to DIAG
+  window.addEventListener('error', (e)=>{ diag('window.onerror:', e.message); });
+
+  // -------- AUTO START: load models on page load --------
+  (async () => {
+    log('Booting…');
+    await loadModels(); // probes + loads + starts webcam + sampling
+  })();
 </script>
 </body>
 </html>
