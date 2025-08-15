@@ -49,6 +49,7 @@
       <button id="btnPlay" disabled>Play & analyze</button>
       <button id="btnCSV" disabled>Download CSV</button>
       <button id="btnJSON" disabled>Download JSON</button>
+      <button id="btnReport" disabled>Generate Report</button>
       <span id="status" style="align-self:center;color:#9aa3b2">Booting…</span>
     </div>
 
@@ -109,7 +110,6 @@
   async function startWebcam(){
     try{
       diag('Requesting webcam… (if nothing happens, click the lock icon → Allow camera)');
-      // Log permission state if available
       if (navigator.permissions && navigator.permissions.query) {
         try {
           const p = await navigator.permissions.query({ name: 'camera' });
@@ -117,7 +117,6 @@
           p.onchange = () => diag('Camera permission changed to:', p.state);
         } catch {}
       }
-      // Inform if waiting too long
       const pendingTimer = setTimeout(()=>diag('Still waiting for camera… Click the lock icon → Allow'), 5000);
 
       const st = await navigator.mediaDevices.getUserMedia({
@@ -222,7 +221,7 @@
     const awareFrames = valid.filter(f => (f.happy>0.15)||(f.sad>0.15)||(f.angry>0.15)||(f.surprised>0.15)||(f.fearful>0.15)).length;
 
     const PI  = clamp( (posFrames/total)*100, 0, 100 );
-    const BP  = clamp( ((posFrames - negFrames)/total)*100 + 50, 0, 100 ); // net balance centered at 50
+    const BP  = clamp( ((posFrames - negFrames)/total)*100 + 50, 0, 100 );
     const AWR = clamp( (awareFrames/total)*100, 0, 100 );
 
     piEl.textContent  = PI.toFixed(1);
@@ -244,6 +243,100 @@
     return lines.join('\n');
   }
 
+  // ===== Report builder =====
+  function fmtTs(s){
+    const mm = Math.floor(s/60); const ss = Math.floor(s%60);
+    return `${mm.toString().padStart(2,'0')}:${ss.toString().padStart(2,'0')}`;
+  }
+  function avg(arr){ return arr.reduce((a,b)=>a+b,0)/(arr.length||1); }
+
+  function buildStats(frames){
+    const valid = frames.filter(f=>f.face);
+    const ems = ['happy','sad','angry','disgusted','fearful','surprised','neutral'];
+    const avgEmo = Object.fromEntries(ems.map(k=>[k, avg(valid.map(v=>+v[k]||0))]));
+
+    // Peaks (top 5 by positivity / negativity)
+    const scored = valid.map(v=>({
+      t:v.t,
+      pos:(v.happy||0) + 0.6*(v.surprised||0),
+      neg:(v.sad||0) + (v.angry||0) + 0.8*(v.disgusted||0)
+    }));
+    const topPos = [...scored].sort((a,b)=>b.pos-a.pos).slice(0,5);
+    const topNeg = [...scored].sort((a,b)=>b.neg-a.neg).slice(0,5);
+
+    // Engagement segments (emotion above awareness threshold 0.15)
+    const segs=[]; let cur=null;
+    valid.forEach(v=>{
+      const engaged = (v.happy>0.15)||(v.sad>0.15)||(v.angry>0.15)||(v.surprised>0.15)||(v.fearful>0.15);
+      if(engaged && !cur){ cur={start:v.t, end:v.t, peakPos:0}; }
+      if(engaged && cur){ cur.end=v.t; const ps=(v.happy||0)+0.6*(v.surprised||0); if(ps>cur.peakPos) cur.peakPos=ps; }
+      if(!engaged && cur){ segs.push(cur); cur=null; }
+    });
+    if(cur) segs.push(cur);
+    const topSegs = segs.map(s=>({ start:s.start, end:s.end, dur:Math.max(0,(s.end-s.start)), peakPos:s.peakPos }))
+                        .sort((a,b)=>b.dur-a.dur).slice(0,5);
+
+    return { validCount:valid.length, totalCount:frames.length, avgEmo, topPos, topNeg, topSegs };
+  }
+
+  function buildReportHTML(meta, kpi, frames){
+    const stats = buildStats(frames);
+    const facePct = ((stats.validCount/Math.max(1,stats.totalCount))*100).toFixed(1);
+    const em = stats.avgEmo;
+    const ts = new Date(meta.ts||Date.now()).toLocaleString();
+
+    function liPeak(p){ return `<li><b>${fmtTs(p.t)}</b> — score: ${p.pos?p.pos.toFixed(2):p.neg.toFixed(2)}</li>`; }
+    function liSeg(s){ return `<li><b>${fmtTs(s.start)}</b> → <b>${fmtTs(s.end)}</b> (${s.dur.toFixed(1)}s), peak positive ${s.peakPos.toFixed(2)}</li>`; }
+
+    const html = `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Emotion Ad Report</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;padding:24px;background:#0f1115;color:#e5e7eb}
+  h1,h2{color:#fff}
+  .kpis{display:flex;gap:12px;flex-wrap:wrap}
+  .card{background:#121826;border:1px solid #1f2937;border-radius:12px;padding:12px;flex:1 1 220px}
+  .muted{color:#9aa3b2}
+  ul{margin:8px 0 0 18px}
+  code{background:#0b1020;padding:2px 6px;border-radius:6px}
+  details{margin-top:12px}
+</style>
+</head>
+<body>
+  <h1>Emotion-Only Ad Report</h1>
+  <div class="muted">Generated: ${ts}</div>
+  <p class="muted">Ad: <code>${meta.ad||''}</code></p>
+
+  <div class="kpis">
+    <div class="card"><div class="muted">Purchase Intention</div><div style="font-size:28px">${kpi.PI}</div></div>
+    <div class="card"><div class="muted">Brand Perception</div><div style="font-size:28px">${kpi.BP}</div></div>
+    <div class="card"><div class="muted">Awareness</div><div style="font-size:28px">${kpi.AWR}</div></div>
+    <div class="card"><div class="muted">Face-tracked frames</div><div style="font-size:28px">${stats.validCount} / ${stats.totalCount} (${facePct}%)</div></div>
+  </div>
+
+  <h2>Emotion Averages</h2>
+  <div class="kpis">
+    ${Object.entries(em).map(([k,v])=>`<div class=\"card\"><div class=\"muted\">${k}</div><div style=\"font-size:22px\">${v.toFixed(3)}</div></div>`).join('')}
+  </div>
+
+  <h2>Highlights</h2>
+  <div class="kpis">
+    <div class="card"><b>Top Positive Moments</b><ul>${stats.topPos.map(liPeak).join('')}</ul></div>
+    <div class="card"><b>Top Negative Moments</b><ul>${stats.topNeg.map(liPeak).join('')}</ul></div>
+    <div class="card"><b>Longest Engaged Segments</b><ul>${stats.topSegs.map(liSeg).join('')}</ul></div>
+  </div>
+
+  <details>
+    <summary>Raw frames JSON</summary>
+    <pre>${JSON.stringify(frames,null,2)}</pre>
+  </details>
+</body>
+</html>`;
+    return html;
+  }
+
   // ===== UI events =====
   $('btnCam').addEventListener('click', startWebcam);
   $('btnLoad').addEventListener('click', loadModels);
@@ -252,7 +345,6 @@
     frames.length = 0; faceFrames = 0; pFacesEl.textContent='0'; pFramesEl.textContent='0';
     ad.src = ($('adUrl').value || '').trim() || 'ads/0813.mp4';
 
-    // Autoplay handling: try, then retry muted if blocked
     try {
       await ad.play();
     } catch (e) {
@@ -271,7 +363,7 @@
     if (timer) { clearInterval(timer); timer=null; }
     const k = calcKPIs();
     log(`Done. PI=${k.PI} BP=${k.BP} AWR=${k.AWR}`);
-    $('btnCSV').disabled = false; $('btnJSON').disabled = false;
+    $('btnCSV').disabled = false; $('btnJSON').disabled = false; $('btnReport').disabled = false;
   });
 
   $('btnCSV').addEventListener('click', () => download(`frames_${Date.now()}.csv`, framesCSV(frames), 'text/csv'));
@@ -281,13 +373,18 @@
     download(`report_${Date.now()}.json`, JSON.stringify(report, null, 2), 'application/json');
   });
 
+  // Generate HTML report
+  $('btnReport').addEventListener('click', () => {
+    const k = calcKPIs();
+    const meta = { ts: Date.now(), ad: $('adUrl').value };
+    const html = buildReportHTML(meta, k, frames);
+    download(`emotion_report_${Date.now()}.html`, html, 'text/html');
+  });
+
   // ===== Boot =====
   (async () => {
     diagEl.textContent = 'DIAG:\nPage loaded. Booting…\n';
-    // Don’t auto-start webcam: user clicks Start webcam to guarantee the prompt shows
-    // But we can load models immediately
     loadModels();
-    // Safety net: if both are ready but button didn't flip, force-enable after 3s
     setTimeout(() => {
       if (webcamReady && modelsReady) {
         const btn = $('btnPlay');
@@ -301,3 +398,4 @@
 </script>
 </body>
 </html>
+
