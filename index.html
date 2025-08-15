@@ -1,15 +1,296 @@
-<script>
-  // Button to start webcam via user gesture (helps some browsers)
-  document.getElementById('btnCam').addEventListener('click', startWebcam);
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Emotion-Only Ad Test — Live KPIs</title>
+<style>
+  body { font-family: system-ui, Arial, sans-serif; margin:16px; background:#0f1115; color:#fff; }
+  .row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start}
+  .panel{flex:1 1 360px;border:1px solid #222;border-radius:10px;padding:12px;background:#131722}
+  label{display:block;margin-top:8px;font-weight:600}
+  input[type="text"]{width:100%;padding:8px 10px;border-radius:8px;border:1px solid #333;background:#161a26;color:#fff}
+  button{padding:10px 14px;border:0;border-radius:10px;background:#2a2f3d;color:#fff;cursor:pointer}
+  button:disabled{opacity:.55;cursor:not-allowed}
+  video,canvas{width:100%;border-radius:10px;background:#000}
+  #diag{white-space:pre-wrap;font:12px ui-monospace;max-height:280px;overflow:auto;background:#0d1220;border:1px solid #222;border-radius:8px;padding:8px;margin-top:10px}
+  .kpi{display:flex;gap:10px;margin-top:10px}
+  .kpi>div{flex:1 1 0;background:#101520;border:1px solid #222;border-radius:10px;padding:10px;text-align:center}
+  .pill{display:inline-block;padding:2px 8px;border-radius:8px;background:#1f2433;margin-left:8px;font:12px ui-monospace}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.18.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+</head>
+<body>
 
+<h2>Emotion-Only Ad Test
+  <span class="pill">frames: <span id="pFrames">0</span></span>
+  <span class="pill">faces: <span id="pFaces">0</span></span>
+</h2>
+
+<div class="row">
+  <div class="panel" style="flex:1 1 560px;">
+    <label>Ad URL (MP4 — repo path OK)</label>
+    <input id="adUrl" type="text" value="ads/0813.mp4" />
+
+    <div class="row" style="margin-top:10px;">
+      <div style="flex:1 1 380px;">
+        <video id="ad" controls playsinline></video>
+      </div>
+      <div style="flex:1 1 220px;position:relative">
+        <video id="cam" autoplay muted playsinline></video>
+        <canvas id="overlay"></canvas>
+      </div>
+    </div>
+
+    <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap">
+      <button id="btnCam">Start webcam</button>
+      <button id="btnLoad" disabled>Load models</button>
+      <button id="btnPlay" disabled>Play & analyze</button>
+      <button id="btnCSV" disabled>Download CSV</button>
+      <button id="btnJSON" disabled>Download JSON</button>
+      <span id="status" style="align-self:center;color:#9aa3b2">Booting…</span>
+    </div>
+
+    <div class="kpi">
+      <div><div style="color:#9aa3b2">Purchase Intention</div><div id="pi">—</div></div>
+      <div><div style="color:#9aa3b2">Brand Perception</div><div id="bp">—</div></div>
+      <div><div style="color:#9aa3b2">Awareness</div><div id="awr">—</div></div>
+    </div>
+
+    <div id="diag">DIAG:\n</div>
+  </div>
+
+  <div class="panel" style="flex:1 1 320px;">
+    <b>Tips</b>
+    <ul style="color:#9aa3b2">
+      <li>Click <b>Start webcam</b> — allow camera in the browser prompt (lock icon → Allow).</li>
+      <li>Click <b>Load models</b> — you should see three Probe lines then “MODELS: OK”.</li>
+      <li>Click <b>Play & analyze</b> — ad plays, box+landmarks draw, DIAG prints live emotions.</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+  // ===== Paths / settings =====
+  const MODEL_URL = '/Emotion-Ai-/models';
+  const SAMPLE_MS = 200;
+
+  // ===== DOM =====
+  const $ = id => document.getElementById(id);
+  const ad = $('ad'), cam = $('cam'), canv = $('overlay'), ctx = canv.getContext('2d');
+  const statusEl = $('status'), diagEl = $('diag');
+  const piEl=$('pi'), bpEl=$('bp'), awrEl=$('awr');
+  const pFramesEl=$('pFrames'), pFacesEl=$('pFaces');
+
+  // ===== State =====
+  let modelsReady=false, webcamReady=false;
+  let timer=null;
+  const frames=[]; // per-frame emotions
+  let faceFrames=0;
+
+  // ===== Utils & DIAG =====
+  const log = (...a)=> statusEl.textContent = a.join(' ');
+  const diag = (...a)=> { console.log('[diag]',...a); diagEl.textContent += a.join(' ') + '\n'; };
+  const clamp=(x,a,b)=>Math.min(b,Math.max(a,x));
+  function updateReady(label=''){
+    const ready = (webcamReady===true) && (modelsReady===true);
+    $('btnPlay').disabled = !ready;
+    diag(`READY? ${ready} (webcamReady=${webcamReady} modelsReady=${modelsReady}) ${label}`);
+  }
+  window.addEventListener('error', e => {
+    diag(`JS ERROR: ${e.message} @ ${e.filename}:${e.lineno}`);
+  });
+  window.addEventListener('unhandledrejection', e => {
+    diag(`Promise REJECTION: ${e.reason}`);
+  });
+
+  // ===== Webcam =====
+  async function startWebcam(){
+    try{
+      diag('Requesting webcam… (if nothing happens, click the lock icon → Allow camera)');
+      // Log permission state if available
+      if (navigator.permissions && navigator.permissions.query) {
+        try {
+          const p = await navigator.permissions.query({ name: 'camera' });
+          diag('Camera permission state:', p.state);
+          p.onchange = () => diag('Camera permission changed to:', p.state);
+        } catch {}
+      }
+      // Inform if waiting too long
+      const pendingTimer = setTimeout(()=>diag('Still waiting for camera… Click the lock icon → Allow'), 5000);
+
+      const st = await navigator.mediaDevices.getUserMedia({
+        video:{facingMode:'user', width:{ideal:640}, height:{ideal:480}}, audio:false
+      });
+      clearTimeout(pendingTimer);
+
+      cam.srcObject = st; await cam.play();
+      await new Promise(r => cam.onloadedmetadata = r);
+      canv.width = cam.videoWidth || 640; canv.height = cam.videoHeight || 480;
+
+      webcamReady = true; window.webcamReady = true;
+      log(`Webcam ready ${canv.width}x${canv.height}`);
+      $('btnLoad').disabled = false;
+      updateReady('[after webcam]');
+    }catch(e){
+      diag('webcam error:', e?.message || e);
+      alert('Camera error: ' + (e?.message || e));
+    }
+  }
+
+  // ===== Models =====
+  async function loadModels(){
+    try{
+      const probe = async f => {
+        const url = `${MODEL_URL}/${f}?v=${Date.now()}`;
+        diag('Probe:', url);
+        const r = await fetch(url, { cache:'no-store' });
+        if(!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
+      };
+      await probe('tiny_face_detector_model-weights_manifest.json');
+      await probe('face_landmark_68_model-weights_manifest.json');
+      await probe('face_expression_model-weights_manifest.json');
+
+      log('Loading models…');
+      await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+      await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+      await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
+      modelsReady = true; window.modelsReady = true;
+      diag('MODELS: OK ✔ tinyFace + landmarks68 + expressions');
+      updateReady('[after models]');
+    }catch(e){
+      diag('Model load ERROR:', e?.message || e);
+      log('Model load failed — check DIAG URLs');
+    }
+  }
+
+  // ===== Detection (aggressive) =====
+  async function detectOnce(videoEl){
+    const tries = [
+      { inputSize: 320, scoreThreshold: 0.12 },
+      { inputSize: 256, scoreThreshold: 0.12 },
+      { inputSize: 224, scoreThreshold: 0.10 },
+      { inputSize: 192, scoreThreshold: 0.08 },
+      { inputSize: 160, scoreThreshold: 0.06 }
+    ];
+    for (const opt of tries){
+      const res = await faceapi
+        .detectAllFaces(videoEl, new faceapi.TinyFaceDetectorOptions(opt))
+        .withFaceLandmarks().withFaceExpressions();
+      if (res && res.length){
+        return res.reduce((b,c)=> c.detection.score > (b?.detection.score||0) ? c : b, null);
+      }
+    }
+    return null;
+  }
+
+  // ===== Sampling loop =====
+  async function tick(){
+    ctx.clearRect(0,0,canv.width,canv.height);
+    ctx.drawImage(cam, 0, 0, canv.width, canv.height);
+
+    let row = { t: ad.currentTime||0, happy:0,sad:0,angry:0,disgusted:0,fearful:0,surprised:0,neutral:0, face:0 };
+    if (modelsReady){
+      const det = await detectOnce(cam);
+      if (det){
+        const r = faceapi.resizeResults(det, { width: canv.width, height: canv.height });
+        faceapi.draw.drawDetections(canv, r);
+        faceapi.draw.drawFaceLandmarks(canv, r);
+
+        const e = det.expressions || {};
+        row.happy=+(e.happy||0); row.sad=+(e.sad||0); row.angry=+(e.angry||0);
+        row.disgusted=+(e.disgusted||0); row.fearful=+(e.fearful||0);
+        row.surprised=+(e.surprised||0); row.neutral=+(e.neutral||0);
+        row.face=1;
+
+        faceFrames++; pFacesEl.textContent=String(faceFrames);
+        if (faceFrames % 20 === 0) diag(`faces so far: ${faceFrames} / frames ${frames.length}`);
+        diag(`expr t=${row.t.toFixed(2)} happy=${row.happy.toFixed(2)} sad=${row.sad.toFixed(2)} ang=${row.angry.toFixed(2)} dis=${row.disgusted.toFixed(2)} surp=${row.surprised.toFixed(2)} fear=${row.fearful.toFixed(2)}`);
+      }
+    }
+    frames.push(row); pFramesEl.textContent=String(frames.length);
+  }
+
+  // ===== KPIs =====
+  function calcKPIs(){
+    const valid = frames.filter(f=>f.face);
+    const total = valid.length || 1;
+
+    const posFrames = valid.filter(f => (f.happy>0.30) || (f.surprised>0.30)).length;
+    const negFrames = valid.filter(f => (f.sad>0.30) || (f.angry>0.30) || (f.disgusted>0.30)).length;
+    const awareFrames = valid.filter(f => (f.happy>0.15)||(f.sad>0.15)||(f.angry>0.15)||(f.surprised>0.15)||(f.fearful>0.15)).length;
+
+    const PI  = clamp( (posFrames/total)*100, 0, 100 );
+    const BP  = clamp( ((posFrames - negFrames)/total)*100 + 50, 0, 100 ); // net balance centered at 50
+    const AWR = clamp( (awareFrames/total)*100, 0, 100 );
+
+    piEl.textContent  = PI.toFixed(1);
+    bpEl.textContent  = BP.toFixed(1);
+    awrEl.textContent = AWR.toFixed(1);
+
+    return { PI:+PI.toFixed(1), BP:+BP.toFixed(1), AWR:+AWR.toFixed(1) };
+  }
+
+  // ===== Exports =====
+  function download(name, text, type='text/plain'){
+    const blob = new Blob([text], {type}); const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob); a.download=name; a.click(); URL.revokeObjectURL(a.href);
+  }
+  function framesCSV(rows){
+    const header = ['t','happy','sad','angry','disgusted','fearful','surprised','neutral','face'];
+    const lines = [header.join(',')];
+    rows.forEach(r => lines.push([r.t,r.happy,r.sad,r.angry,r.disgusted,r.fearful,r.surprised,r.neutral,r.face].map(x=>typeof x==='number'?x.toFixed(4):x).join(',')));
+    return lines.join('\n');
+  }
+
+  // ===== UI events =====
+  $('btnCam').addEventListener('click', startWebcam);
+  $('btnLoad').addEventListener('click', loadModels);
+
+  $('btnPlay').addEventListener('click', async () => {
+    frames.length = 0; faceFrames = 0; pFacesEl.textContent='0'; pFramesEl.textContent='0';
+    ad.src = ($('adUrl').value || '').trim() || 'ads/0813.mp4';
+
+    // Autoplay handling: try, then retry muted if blocked
+    try {
+      await ad.play();
+    } catch (e) {
+      diag('Autoplay blocked, retrying muted…');
+      ad.muted = true;
+      try { await ad.play(); }
+      catch (_) { log('Click the video once to start playback, then click Play & analyze again.'); return; }
+    }
+
+    if (timer) clearInterval(timer);
+    timer = setInterval(tick, SAMPLE_MS);
+    log('Analyzing…');
+  });
+
+  ad.addEventListener('ended', () => {
+    if (timer) { clearInterval(timer); timer=null; }
+    const k = calcKPIs();
+    log(`Done. PI=${k.PI} BP=${k.BP} AWR=${k.AWR}`);
+    $('btnCSV').disabled = false; $('btnJSON').disabled = false;
+  });
+
+  $('btnCSV').addEventListener('click', () => download(`frames_${Date.now()}.csv`, framesCSV(frames), 'text/csv'));
+  $('btnJSON').addEventListener('click', () => {
+    const k = calcKPIs();
+    const report = { meta:{ ts:Date.now(), ad:$('adUrl').value }, kpi:k, frames };
+    download(`report_${Date.now()}.json`, JSON.stringify(report, null, 2), 'application/json');
+  });
+
+  // ===== Boot =====
   (async () => {
     diagEl.textContent = 'DIAG:\nPage loaded. Booting…\n';
-    // Don’t auto-start webcam; wait for user tap if permission was blocked
-    loadModels(); // models can load immediately
-    // Safety net: if both become ready but UI didn’t flip, force enable after 3s
+    // Don’t auto-start webcam: user clicks Start webcam to guarantee the prompt shows
+    // But we can load models immediately
+    loadModels();
+    // Safety net: if both are ready but button didn't flip, force-enable after 3s
     setTimeout(() => {
       if (webcamReady && modelsReady) {
-        const btn = document.getElementById('btnPlay');
+        const btn = $('btnPlay');
         if (btn && btn.disabled) {
           btn.disabled = false;
           diag('WARN: Forcing Play button enabled (both ready).');
@@ -18,3 +299,5 @@
     }, 3000);
   })();
 </script>
+</body>
+</html>
