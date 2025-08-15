@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Emotion Ad Test — Report (PI / Brand / Emotions) · v5.0</title>
+<title>Emotion Ad Test — Report (PI / Brand / Emotions) · v5.1</title>
 <style>
   :root { color-scheme: dark; }
   body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin:16px; background:#0f1115; color:#fff; }
@@ -28,7 +28,7 @@
 </head>
 <body>
 
-<h2>Emotion Ad Test — Webcam → Report
+<h2>Emotion-Only Ad Test (Webcam → Report)
   <span id="samplestate" class="badge">IDLE</span>
   <span class="pill">Tick: <span id="tick">0</span></span>
   <span class="pill">pushes: <span id="pPushes">0</span></span>
@@ -43,10 +43,10 @@
 
     <div class="panel" style="margin-top:10px;">
       <b>Brand moment windows (seconds: start,end)</b>
-      <label>Logo</label> <input id="logoWin" type="text" value="0.5,2.5" />
-      <label>Packshot</label> <input id="packWin" type="text" value="5,7" />
-      <label>CTA</label> <input id="ctaWin" type="text" value="10,13" />
-      <div class="muted" style="margin-top:6px;">Rough timings are fine; refine later.</div>
+      <label>Logo</label> <input id="logoWin" type="text" value="2,4" />
+      <label>Packshot</label> <input id="packWin" type="text" value="8,10" />
+      <label>CTA</label> <input id="ctaWin" type="text" value="14,17" />
+      <div class="muted" style="margin-top:6px;">Use times that clearly fall inside your ad.</div>
     </div>
 
     <div class="btns">
@@ -79,16 +79,16 @@
   <div class="panel" style="flex:1 1 320px;">
     <b>Notes</b>
     <ul class="muted">
-      <li>Models auto-load from <code>/Emotion-Ai-/models</code>. DIAG logs the exact URLs and “MODELS: OK”.</li>
+      <li>Models load from <code>/Emotion-Ai-/models</code>. DIAG will show “MODELS: OK”.</li>
       <li>Sampler starts immediately; samples increase even before models load.</li>
-      <li>Report contains: Purchase Intention (±), Brand Perception (±), and emotion peak timestamps.</li>
+      <li>We log live expression values; if they’re ~0, improve lighting and look frontal.</li>
     </ul>
   </div>
 </div>
 
 <script>
-  // ======= CONFIG (matches your live URL) =======
-  const MODEL_URL = '/Emotion-Ai-/models'; // your GitHub Pages path
+  // ======= CONFIG =======
+  const MODEL_URL = '/Emotion-Ai-/models'; // matches your GitHub Pages repo
   const SAMPLE_MS = 150, BASELINE_PRE=[2.0,0.5], RESP_DUR=2.0;
 
   // ======= DOM =======
@@ -102,6 +102,7 @@
   let modelsReady=false, webcamReady=false, samplingTimer=null, startedAtMs=null;
   let framesCount=0, fpsT0=performance.now(), pushes=0, tick=0;
   const stream=[]; let lastNose=null;
+  let faceFrames = 0; // <— B) face frame counter
 
   // ======= UTILS =======
   const log=(...a)=>{ console.log(...a); statusEl.textContent=a.join(' '); };
@@ -113,7 +114,6 @@
   const sigmoid=x=>1/(1+Math.exp(-x));
   const parseWin = s => { const [a,b]=(s||'').split(',').map(Number); return [Number(a||0),Number(b||0)]; };
   const inWindow = (t, w) => t>=w[0] && t<=w[1];
-
   function setBadge(active){ badge.textContent = active ? 'SAMPLING' : 'IDLE'; badge.className='badge '+(active?'ok':''); }
 
   // ======= FEATURES =======
@@ -141,19 +141,15 @@
     return { eyesOpen, gazeX, gazeY, jitter };
   }
 
-  // map expressions to valence/arousal
   function valenceFromExpr(e){
-    const pos = (e.happy||0) + 0.6*(e.surprised||0); // surprise tends positive in ads
+    const pos = (e.happy||0) + 0.6*(e.surprised||0);
     const neg = (e.angry||0) + (e.sad||0) + (e.disgusted||0) + 0.5*(e.fearful||0);
     return clamp(pos - neg, -1, 1);
   }
   function arousalFromExpr(e){
     return clamp((e.surprised||0)+(e.fearful||0)+(e.angry||0)+0.5*(e.happy||0), 0, 1);
   }
-  function amusedFromExpr(e){
-    // simple proxy: co-activation of happy + surprised
-    return clamp(0.5*((e.happy||0)+(e.surprised||0)), 0, 1);
-  }
+  function amusedFromExpr(e){ return clamp(0.5*((e.happy||0)+(e.surprised||0)), 0, 1); }
 
   // ======= WINDOWS / DELTAS =======
   function windowSlice(t0,t1){ return stream.filter(r=>r.t>=t0 && r.t<t1); }
@@ -175,19 +171,15 @@
     const jitterN = Math.max(0, 1 - (jit/2.0));
     return 0.7*eyes + 0.3*jitterN;
   }
-
   function computeKPIs(winLogo, winPack, winCTA){
     const tLogo=winLogo[0], tPack=winPack[0], tCTA=winCTA[0];
     const dV_logo = deltaFeature(tLogo, 'val');
     const dV_pack = deltaFeature(tPack, 'val');
     const baseAll = windowStats(0, Math.max(0.1, tLogo), 'val');
     const z = (x, m=baseAll.mean, s=0.25)=> s>1e-6 ? (x-m)/s : 0;
-
     const PR = 100/(1+Math.exp(-(0.95*z(dV_logo.dMean)+0.55*z(dV_pack.dMean))));
     const dA_logo = deltaFeature(tLogo, 'aro').dMean;
     const AWR = 100/(1+Math.exp(-(0.9*z(dA_logo))));
-
-    // For PI we look at CTA window
     const wCTA = windowStats(tCTA, tCTA+Math.max(2.5, RESP_DUR), 'val');
     const v_cta=wCTA.mean;
     const eng_cta = engagementIndexSimple(tCTA, Math.max(2.5, RESP_DUR));
@@ -195,37 +187,30 @@
     return { PR:+PR.toFixed(1), AWR:+AWR.toFixed(1), PI:+PIraw.toFixed(1) };
   }
 
-  // ======= “Positive/Negative” splits for the report =======
+  // ======= Positive/Negative splits =======
   function pct(x){ return Math.max(0, Math.min(100, +x.toFixed(1))); }
   function posNegFromScore(score){ const pos = clamp(score,0,100); return { Positive:pct(pos), Negative:pct(100-pos) }; }
-
   function brandPerception(winLogo, winPack){
-    // average valence over brand moments vs baseline
-    const tLogo=winLogo[0], tPack=winPack[0];
+    const tLogo=winLogo[0];
     const base = windowStats(Math.max(0,tLogo-3), Math.max(0,tLogo-0.5), 'val').mean;
     const brandVal = mean([
       windowStats(winLogo[0], winLogo[1], 'val').mean,
       windowStats(winPack[0], winPack[1], 'val').mean
     ]);
-    const s = 100/(1+Math.exp(-( (brandVal - base) / 0.2 ))); // squashed 0–100
+    const s = 100/(1+Math.exp(-( (brandVal - base) / 0.2 ))); // 0–100
     return posNegFromScore(s);
   }
-
   function purchaseIntention(winCTA){
-    const s = computeKPIs([0,0],[0,0],winCTA).PI; // already 0–100
+    const s = computeKPIs([0,0],[0,0],winCTA).PI;
     return posNegFromScore(s);
   }
 
-  // ======= Emotion peaks (timestamps) =======
+  // ======= Emotion peaks =======
   function extractPeaks(emokey, threshold=0.5, minSep=0.6){
-    const out = [];
-    let last = -999;
+    const out = []; let last = -999;
     for (const r of stream){
       if (r.face && r[emokey] !== undefined && r[emokey] >= threshold){
-        if (r.t - last >= minSep){
-          out.push(+r.t.toFixed(2));
-          last = r.t;
-        }
+        if (r.t - last >= minSep){ out.push(+r.t.toFixed(2)); last = r.t; }
       }
     }
     return out;
@@ -245,7 +230,7 @@
     a.href=URL.createObjectURL(blob); a.download=name; a.click(); URL.revokeObjectURL(a.href);
   }
 
-  // ======= MODELS (load in background) =======
+  // ======= MODELS =======
   async function loadModels(){
     try{
       const probe = async f => {
@@ -264,9 +249,7 @@
       await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
       modelsReady = true;
       diag('MODELS: OK ✔ tinyFace + landmarks68 + expressions');
-    }catch(e){
-      diag('Model load ERROR:', e.message);
-    }
+    }catch(e){ diag('Model load ERROR:', e.message); }
   }
 
   // ======= WEBCAM =======
@@ -288,7 +271,6 @@
         ? +ad.currentTime.toFixed(3)
         : (startedAtMs ? ((performance.now()-startedAtMs)/1000).toFixed(3) : 0);
 
-      // draw webcam frame
       ctx.clearRect(0,0,canv.width,canv.height);
       ctx.drawImage(cam, 0, 0, canv.width, canv.height);
 
@@ -297,12 +279,13 @@
         gazeX:0.5, gazeY:0.5, jitter:0, face:0 };
 
       if (modelsReady){
-        // robust detection: multiple tries if needed
+        // A) aggressive detection tries
         const tries = [
-          { inputSize:224, scoreThreshold:0.2 },
-          { inputSize:192, scoreThreshold:0.15 },
-          { inputSize:160, scoreThreshold:0.12 },
-          { inputSize:128, scoreThreshold:0.10 }
+          { inputSize: 320, scoreThreshold: 0.12 },
+          { inputSize: 256, scoreThreshold: 0.12 },
+          { inputSize: 224, scoreThreshold: 0.10 },
+          { inputSize: 192, scoreThreshold: 0.08 },
+          { inputSize: 160, scoreThreshold: 0.06 }
         ];
         let det = null;
         for (const opt of tries){
@@ -337,15 +320,20 @@
           row.aro = arousalFromExpr(e);
           row.att = clamp(((feats.eyesOpen)||0),0,1);
           row.gazeX = feats.gazeX; row.gazeY = feats.gazeY; row.jitter = feats.jitter; row.face=1;
+
+          // B) count face frames + D) live expression readout
+          faceFrames++;
+          if (faceFrames % 20 === 0) diag(`faces so far: ${faceFrames}/${stream.length}`);
+          diag(`expr t=${row.t.toFixed(2)} happy=${row.happy.toFixed(2)} sad=${row.sad.toFixed(2)} ang=${row.angry.toFixed(2)} dis=${row.disgusted.toFixed(2)} surp=${row.surprised.toFixed(2)} fear=${row.fearful.toFixed(2)}`);
+        } else {
+          diag('No face this frame.');
         }
       }
 
-      // push every tick
       stream.push(row);
       pushes++; pPushes.textContent=String(pushes);
       pSamples.textContent=String(stream.length);
 
-      // fps
       framesCount++; const now = performance.now();
       if (now - fpsT0 > 1000){ fpsEl.textContent = String(framesCount); framesCount=0; fpsT0 = now; }
 
@@ -355,6 +343,7 @@
   function startSampling(){
     if (!webcamReady) return;
     stream.length=0; lastNose=null; pushes=0; tick=0; startedAtMs=performance.now();
+    faceFrames = 0;
     if (samplingTimer) clearInterval(samplingTimer);
     samplingTimer = setInterval(sampleOnce, SAMPLE_MS);
     diag('Sampling started');
@@ -384,35 +373,31 @@
     const winPack = parseWin($('packWin').value);
     const winCTA  = parseWin($('ctaWin').value);
 
-    // KPIs
     const KPIs = computeKPIsPublic(winLogo, winPack, winCTA);
-    const PI = purchaseIntention(winCTA);          // {Positive, Negative}
-    const BP = brandPerception(winLogo, winPack);  // {Positive, Negative}
+    const PI = purchaseIntention(winCTA);
+    const BP = brandPerception(winLogo, winPack);
 
-    // emotion peaks
+    // C) lower thresholds for peaks
     const peaks = {
-      Happy:      extractPeaks('happy', 0.55, 0.7),
-      Amused:     extractPeaks('amused', 0.45, 0.7),
-      Sad:        extractPeaks('sad', 0.55, 0.7),
-      Angry:      extractPeaks('angry', 0.55, 0.7),
-      Surprised:  extractPeaks('surprised', 0.55, 0.7)
+      Happy:      extractPeaks('happy',     0.35, 0.6),
+      Amused:     extractPeaks('amused',    0.30, 0.6),
+      Sad:        extractPeaks('sad',       0.35, 0.6),
+      Angry:      extractPeaks('angry',     0.35, 0.6),
+      Surprised:  extractPeaks('surprised', 0.35, 0.6)
     };
 
-    // Optional: moments to “add” emotions (if very low presence)
-    // e.g., if Happy peaks list is empty, suggest adding a humor beat near CTA, etc.
     const suggestions = {};
     if (!peaks.Happy.length) suggestions.Happy = "Consider adding a smile/humor beat near CTA.";
     if (!peaks.Amused.length) suggestions.Amused = "Add a light surprise + smile moment before packshot.";
     if (!peaks.Surprised.length) suggestions.Surprised = "Introduce a visual reveal around the logo.";
-    // (Feel free to expand these heuristic suggestions.)
 
     return {
       meta: { ts: Date.now(), ad: $('adUrl').value },
-      kpi_raw: KPIs, // PR/AWR/PI numbers (0–100)
-      PurchaseIntention: PI,          // Positive / Negative %
-      BrandPerception: BP,            // Positive / Negative %
-      EmotionsToAdd: peaks,           // timestamps
-      suggestions                      // optional heuristics
+      kpi_raw: KPIs,
+      PurchaseIntention: PI,
+      BrandPerception: BP,
+      EmotionsToAdd: peaks,
+      suggestions
     };
   }
 
@@ -420,10 +405,7 @@
     if (!stream.length){ log('No samples captured.'); return; }
     const report = buildReport();
     reportEl.textContent = JSON.stringify(report, null, 2);
-
-    // enable downloads
     $('btnCSV').disabled = false; $('btnJSON').disabled = false;
-
     log('Report ready. You can download JSON/CSV.');
   }
 
@@ -440,8 +422,8 @@
     log('Booting…');
     diag('Page loaded. Starting webcam & sampling; loading models in background.');
     try { await startWebcam(); } catch(e){ diag('webcam error:', e.message); alert('Camera error: '+e.message); }
-    startSampling();  // always sampling
-    loadModels();     // in parallel
+    startSampling();
+    loadModels();
   })();
 </script>
 </body>
