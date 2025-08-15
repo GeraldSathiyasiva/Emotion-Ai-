@@ -24,8 +24,10 @@
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.18.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+<style id="warnStyle">.warn{background:#3b0d0d;color:#ffdada;padding:8px 12px;border:1px solid #5c1212;border-radius:8px;margin:8px 0}</style>
 </head>
 <body>
+<div id="httpsWarn" class="warn" style="display:none">This page is not in a secure context. Camera may fail on <code>http://</code> or <code>file://</code>. Use <b>HTTPS</b> or <b>localhost</b>.</div>
 
 <h2>Emotion-Only Ad Test
   <span class="pill">frames: <span id="pFrames">0</span></span>
@@ -59,7 +61,9 @@
     <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap">
       <button id="btnCam">Start webcam</button>
       <button id="btnLoad" disabled>Load models</button>
-      <button id="btnPlay" disabled>Play & analyze</button>
+      $1
+      <button id="btnAnalyzeOnly" disabled>Analyze webcam only</button>
+      <button id="btnAnalyzeOnly" disabled>Analyze webcam only</button>
       <button id="btnCSV" disabled>Download CSV</button>
       <button id="btnJSON" disabled>Download JSON</button>
       <button id="btnReport" disabled>Generate Report</button>
@@ -109,6 +113,8 @@
 <script>
   // ===== Settings =====
   const SAMPLE_MS = 200; // ~5 Hz
+  const FACE_HINT_TIMEOUT_MS = 3500;
+  const FACE_HINT_TIMEOUT_MS = 3500; // time with no face before hint
 
   // ===== DOM =====
   const $ = id => document.getElementById(id);
@@ -134,7 +140,10 @@
   function updateReady(label=''){
     const ready = (webcamReady===true) && (modelsReady===true);
     $('btnPlay').disabled = !ready;
+    const ao = $('btnAnalyzeOnly'); if (ao) ao.disabled = !ready;
     diag(`READY? ${ready} (webcamReady=${webcamReady} modelsReady=${modelsReady}) ${label}`);
+  } (webcamReady=${webcamReady} modelsReady=${modelsReady}) ${label}`);
+  } (webcamReady=${webcamReady} modelsReady=${modelsReady}) ${label}`);
   }
   window.addEventListener('error', e => { diag(`JS ERROR: ${e.message} @ ${e.filename}:${e.lineno}`); });
   window.addEventListener('unhandledrejection', e => { diag(`Promise REJECTION: ${e.reason}`); });
@@ -156,7 +165,9 @@
       diag('Requesting webcam… (if nothing happens, click the lock icon → Allow camera)');
       try { if(navigator.permissions?.query){ const p = await navigator.permissions.query({ name: 'camera' }); diag('Camera permission state:', p.state); p.onchange=()=>diag('Camera permission changed to:', p.state); } } catch {}
       const warnTimer = setTimeout(()=>diag('Still waiting for camera… Tips: good lighting, face centered, allow camera access'), 5000);
-      const st = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:{ideal:640}, height:{ideal:480} }, audio:false });
+      const st = await navigator.mediaDevices.getUserMedia({
+        video:{ facingMode:'user', width:{ideal:1280}, height:{ideal:720} }, audio:false
+      });
       clearTimeout(warnTimer);
       cam.srcObject = st; await cam.play();
       await new Promise(r => cam.onloadedmetadata = r);
@@ -181,6 +192,22 @@
       await probe('face_expression_model-weights_manifest.json');
 
       log('Loading models…');
+      if (typeof faceapi !== 'undefined' && faceapi.tf && faceapi.tf.setBackend){
+        try { await faceapi.tf.setBackend('webgl'); await faceapi.tf.ready(); diag('TFJS backend: webgl'); } catch(e){ diag('TFJS backend set failed:', e?.message||e); }
+      }
+      await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+      await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+      await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
+      modelsReady = true; window.modelsReady = true; diag('MODELS: OK ✔ tinyFace + landmarks68 + expressions'); updateReady('[after models]');
+    }catch(e){ diag('Model load ERROR:', e?.message || e); log('Model load failed — check DIAG URLs & model path'); }
+  }/${f}?v=${Date.now()}`; diag('Probe:', url);
+        const r = await fetch(url, { cache:'no-store' }); if(!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
+      };
+      await probe('tiny_face_detector_model-weights_manifest.json');
+      await probe('face_landmark_68_model-weights_manifest.json');
+      await probe('face_expression_model-weights_manifest.json');
+
+      log('Loading models…');
       await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
       await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
       await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
@@ -191,7 +218,23 @@
   // ===== Detection (aggressive + hints) =====
   async function detectOnce(videoEl){
     const tries = [
-      { inputSize: 384, scoreThreshold: 0.08 },
+      { inputSize: 512, scoreThreshold: 0.06 },
+      { inputSize: 448, scoreThreshold: 0.06 },
+      { inputSize: 384, scoreThreshold: 0.06 },
+      { inputSize: 320, scoreThreshold: 0.05 },
+      { inputSize: 256, scoreThreshold: 0.05 },
+      { inputSize: 224, scoreThreshold: 0.04 }
+    ];
+    for (const opt of tries){
+      const res = await faceapi
+        .detectAllFaces(videoEl, new faceapi.TinyFaceDetectorOptions(opt))
+        .withFaceLandmarks().withFaceExpressions();
+      if (res && res.length){
+        return res.reduce((b,c)=> c.detection.score > (b?.detection.score||0) ? c : b, null);
+      }
+    }
+    return null;
+  },
       { inputSize: 320, scoreThreshold: 0.08 },
       { inputSize: 256, scoreThreshold: 0.06 },
       { inputSize: 224, scoreThreshold: 0.06 }
@@ -210,9 +253,31 @@
   // ===== Sampling loop =====
   async function tick(){
     ctx.clearRect(0,0,canv.width,canv.height);
-    ctx.drawImage(cam, 0, 0, canv.width, canv.height);
+    // draw cam underlay so user sees themselves even if no detections
+    if (cam.readyState >= 2) ctx.drawImage(cam, 0, 0, canv.width, canv.height);
 
     let row = { t: ad.currentTime||0, happy:0,sad:0,angry:0,disgusted:0,fearful:0,surprised:0,neutral:0, face:0 };
+    if (modelsReady && cam.readyState >= 2){
+      const det = await detectOnce(cam);
+      if (det){
+        const r = faceapi.resizeResults(det, { width: canv.width, height: canv.height });
+        faceapi.draw.drawDetections(canv, r);
+        faceapi.draw.drawFaceLandmarks(canv, r);
+        const e = det.expressions || {};
+        row.happy=+(e.happy||0); row.sad=+(e.sad||0); row.angry=+(e.angry||0);
+        row.disgusted=+(e.disgusted||0); row.fearful=+(e.fearful||0);
+        row.surprised=+(e.surprised||0); row.neutral=+(e.neutral||0);
+        row.face=1; faceFrames++; pFacesEl.textContent=String(faceFrames); lastFaceAt = nowMs();
+      }
+    }
+    frames.push(row); pFramesEl.textContent=String(frames.length);
+
+    // Hints if no face for some time
+    const since = nowMs() - lastFaceAt;
+    if (since > FACE_HINT_TIMEOUT_MS){
+      diag('No face detected → tips: move closer, better lighting, center face; also verify Model Path points to the models folder.');
+    }
+  };
     if (modelsReady){
       const det = await detectOnce(cam);
       if (det){
@@ -395,6 +460,32 @@
   $('btnPlay').addEventListener('click', async () => {
     frames.length = 0; faceFrames = 0; pFacesEl.textContent='0'; pFramesEl.textContent='0'; lastFaceAt = nowMs();
     ad.src = ($('adUrl').value || '').trim() || 'ads/0813.mp4';
+    try { await ad.play(); }
+    catch (e) { diag('Autoplay blocked, retrying muted…'); ad.muted = true; try { await ad.play(); } catch { log('Click the video to start, then click Play & analyze again.'); return; } }
+    if (!timer) { timer = setInterval(tick, SAMPLE_MS); }
+    log('Analyzing…');
+  });
+
+  // Analyze webcam without playing ad
+  $('btnAnalyzeOnly').addEventListener('click', async () => {
+    frames.length = 0; faceFrames = 0; pFacesEl.textContent='0'; pFramesEl.textContent='0'; lastFaceAt = nowMs();
+    if (!timer) { timer = setInterval(tick, SAMPLE_MS); }
+    log('Analyzing webcam…');
+  });
+    ad.src = ($('adUrl').value || '').trim() || 'ads/0813.mp4';
+    try { await ad.play(); }
+    catch (e) { diag('Autoplay blocked, retrying muted…'); ad.muted = true; try { await ad.play(); } catch { log('Click the video to start, then click Play & analyze again.'); return; } }
+    if (!timer) { timer = setInterval(tick, SAMPLE_MS); }
+    log('Analyzing…');
+  });
+
+  // Allow analyzing without an ad (pure webcam test)
+  $('btnAnalyzeOnly').addEventListener('click', () => {
+    frames.length = 0; faceFrames = 0; pFacesEl.textContent='0'; pFramesEl.textContent='0'; lastFaceAt = nowMs();
+    if (!timer) { timer = setInterval(tick, SAMPLE_MS); }
+    log('Analyzing webcam…');
+  });
+    ad.src = ($('adUrl').value || '').trim() || 'ads/0813.mp4';
 
     try { await ad.play(); }
     catch (e) {
@@ -410,6 +501,15 @@
     const k = calcKPIs();
     log(`Done. PI=${k.PI} BP=${k.BP} AWR=${k.AWR}`);
     $('btnCSV').disabled = false; $('btnJSON').disabled = false; $('btnReport').disabled = false;
+  });
+
+  // If the user plays the ad using native controls, auto-start analysis
+  ad.addEventListener('play', () => {
+    if (!timer && modelsReady && webcamReady){
+      lastFaceAt = nowMs();
+      timer = setInterval(tick, SAMPLE_MS);
+      diag('Ad playing detected → auto-started analysis.');
+    }
   });
 
   $('btnCSV').addEventListener('click', () => download(`frames_${Date.now()}.csv`, framesCSV(frames), 'text/csv'));
@@ -432,10 +532,9 @@
   // ===== Boot =====
   (async () => {
     diagEl.textContent = 'DIAG:\nPage loaded. Booting…\n';
-    // don't auto-start webcam (needs user gesture), but allow model preload
+    const secureOK = (location.protocol==='https:' || location.hostname==='localhost');
+    if(!secureOK){ $('httpsWarn').style.display='block'; }
     $('modelPath').addEventListener('change', ()=>{ modelsReady=false; $('btnLoad').disabled=false; });
-    // You may preload models if you want: uncomment next line
-    // loadModels();
   })();
 </script>
 </body>
