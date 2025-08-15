@@ -3,397 +3,94 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Emotion Ad Test — PR / AWR / PI · v4.2</title>
+<title>Debug Sampler · v1</title>
 <style>
   :root { color-scheme: dark; }
   body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin:16px; background:#0f1115; color:#fff; }
-  .row { display:flex; flex-wrap:wrap; gap:14px; align-items:flex-start; }
-  .panel { flex:1 1 360px; border:1px solid #222; border-radius:12px; padding:12px; background:#131722; }
-  label { display:block; font-weight:600; margin-top:10px; }
-  input[type="text"] { width:100%; padding:8px 10px; border-radius:8px; border:1px solid #333; background:#161a26; color:#fff; }
-  .btns { display:flex; gap:10px; align-items:center; margin-top:12px; flex-wrap:wrap; }
-  button { padding:10px 14px; border:0; border-radius:10px; background:#2a2f3d; color:#fff; cursor:pointer; }
-  button:disabled { opacity:.55; cursor:not-allowed; }
-  video, canvas { width:100%; border-radius:12px; background:#000; }
-  .kpi { display:flex; gap:10px; margin-top:10px; }
-  .kpi>div { flex:1 1 0; background:#101520; border:1px solid #222; border-radius:10px; padding:10px; text-align:center; }
-  .muted { color:#9aa3b2; font-size:12px; }
-  .badge { display:inline-block; padding:2px 8px; border-radius:8px; font-size:12px; background:#7c2d12; margin-left:8px; }
-  .ok { background:#14532d; }
-  #diag { font:12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space:pre-wrap; color:#cbd5e1; margin-top:8px; max-height:220px; overflow:auto; border:1px solid #222; border-radius:8px; padding:8px; background:#0d1220; }
-  .pill { display:inline-block; padding:2px 6px; border-radius:6px; background:#1f2433; margin-left:6px; font:12px ui-monospace; }
+  video, canvas { width: 480px; max-width: 100%; background:#000; border-radius:10px; }
+  .pill { display:inline-block; padding:3px 8px; margin:4px 6px 0 0; border-radius:999px; background:#1f2433; font:12px ui-monospace; }
+  #diag { font:12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space:pre-wrap; color:#cbd5e1; margin-top:8px; max-height:240px; overflow:auto; border:1px solid #222; border-radius:8px; padding:8px; background:#0d1220; }
 </style>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.18.0/dist/tf.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+<!-- libs (we’ll add face-api later; for now we just prove the loop runs) -->
 </head>
 <body>
+<h2>Debug Sampler (no models yet)</h2>
 
-<h2>Emotion-Only Ad Test (Webcam → PR / AWR / PI) <span id="samplestate" class="badge">IDLE</span></h2>
-
-<div class="row">
-  <div class="panel" style="flex:1 1 560px;">
-    <label>Ad URL (MP4 — HTTPS or repo path like <code>ads/my_ad.mp4</code>)</label>
-    <input id="adUrl" type="text" placeholder="ads/my_ad.mp4" />
-
-    <div class="panel" style="margin-top:10px;">
-      <b>Brand moment windows (seconds: start,end)</b>
-      <label>Logo</label> <input id="logoWin" type="text" value="5,7.5" />
-      <label>Packshot</label> <input id="packWin" type="text" value="10,12" />
-      <label>CTA</label> <input id="ctaWin" type="text" value="18,21" />
-      <div class="muted" style="margin-top:6px;">Rough timings are fine; refine later.</div>
-    </div>
-
-    <div class="btns">
-      <button id="btnPlay" disabled>Play & analyze</button>
-      <button id="btnTest" disabled>Quick webcam test (10s)</button>
-      <button id="btnCSV" disabled>Download CSV</button>
-      <button id="btnJSON" disabled>Download JSON</button>
-      <span id="status" class="muted">Booting…</span>
-      <span class="pill">samples: <span id="pSamples">0</span></span>
-      <span class="pill">pushes: <span id="pPushes">0</span></span>
-    </div>
-
-    <div class="row" style="margin-top:10px;">
-      <div style="flex:1 1 380px;">
-        <video id="ad" controls playsinline></video>
-      </div>
-      <div style="flex:1 1 220px; position:relative;">
-        <video id="cam" autoplay muted playsinline style="width:100%;height:auto;"></video>
-        <canvas id="overlay" style="width:100%;height:auto;"></canvas>
-        <div class="muted" id="fps">— fps</div>
-      </div>
-    </div>
-
-    <div class="kpi">
-      <div><div class="muted">Positive Recognition</div><div id="kPR">—</div></div>
-      <div><div class="muted">Awareness</div><div id="kAWR">—</div></div>
-      <div><div class="muted">Purchase Intention</div><div id="kPI">—</div></div>
-    </div>
-
-    <div id="diag">DIAG:\n</div>
-  </div>
-
-  <div class="panel" style="flex:1 1 320px;">
-    <b>Notes</b>
-    <ul class="muted">
-      <li>Models auto-load from <code>/Emotion-Ai-/models</code>. DIAG shows exact URLs.</li>
-      <li>After models load, webcam & sampling start; Quick Test now restarts sampling.</li>
-    </ul>
-  </div>
+<div>
+  <video id="cam" autoplay muted playsinline></video>
+  <canvas id="overlay"></canvas>
 </div>
 
+<div>
+  <span class="pill">Tick: <span id="tick">0</span></span>
+  <span class="pill">pushes: <span id="pushes">0</span></span>
+  <span class="pill">samples: <span id="samples">0</span></span>
+  <span class="pill">fps: <span id="fps">0</span></span>
+</div>
+
+<div id="diag">DIAG:\n</div>
+
 <script>
-  // ----- HARD-CODED MODEL PATH FOR YOUR REPO -----
-  const MODEL_URL = '/Emotion-Ai-/models'; // your GitHub Pages path
-
-  // ----- DOM / helpers -----
   const $ = id => document.getElementById(id);
-  const ad = $('ad'), cam = $('cam'), canv = $('overlay'), ctx = canv.getContext('2d');
-  const kPR = $('kPR'), kAWR = $('kAWR'), kPI = $('kPI'), statusEl = $('status'), fpsEl = $('fps'), badge=$('samplestate');
-  const diagEl = $('diag'), pSamples=$('pSamples'), pPushes=$('pPushes');
+  const cam = $('cam'), canv = $('overlay'), ctx = canv.getContext('2d');
+  const tickEl=$('tick'), pushesEl=$('pushes'), samplesEl=$('samples'), fpsEl=$('fps'), diagEl=$('diag');
 
-  const log = (...a)=>{ console.log(...a); statusEl.textContent = a.join(' '); };
-  const diag = (...a)=>{ console.log('[diag]', ...a); diagEl.textContent += a.join(' ') + '\n'; };
+  const SAMPLE_MS = 150;
+  let samplingTimer=null, startedAtMs=null, frames=0, fpsT0=performance.now();
+  let tick=0, pushes=0;
+  const stream=[]; // we’ll just push placeholder rows
 
-  // Global state
-  let modelsReady=false, webcamReady=false, samplingTimer=null, startedAtMs=null, framesCount=0, fpsT0=performance.now();
-  const stream=[]; let lastNose=null; let pushes=0;
+  const diag=(...a)=>{ console.log('[diag]', ...a); diagEl.textContent += a.join(' ') + '\n'; };
 
-  // Utils
-  const clamp=(x,a,b)=>Math.min(b,Math.max(a,x));
-  const mean=a=>a.length?a.reduce((x,y)=>x+y,0)/a.length:0;
-  const peak=a=>a.length?Math.max(...a):0;
-  const stdev=a=>{ if(!a.length) return 0; const m=mean(a); return Math.sqrt(a.reduce((s,x)=>s+(x-m)*(x-m),0)/a.length); };
-  const sigmoid=x=>1/(1+Math.exp(-x));
-  const parsePair = s => { const [a,b]=(s||'').split(',').map(Number); return [Number(a||0),Number(b||0)]; };
-
-  function setBadge(active){ badge.textContent = active ? 'SAMPLING' : 'IDLE'; badge.className = 'badge ' + (active?'ok':''); }
-
-  // Feature helpers
-  function eyeAspectRatio(p, ids){
-    const v = (p[ids[1]].y - p[ids[5]].y + p[ids[2]].y - p[ids[4]].y)/2;
-    const h = (p[ids[3]].x - p[ids[0]].x);
-    return Math.max(0, v/(Math.abs(h)+1e-5));
-  }
-  function featuresFromLandmarks(det){
-    const p = det.landmarks.positions;
-    const earL = eyeAspectRatio(p,[36,37,38,39,40,41]);
-    const earR = eyeAspectRatio(p,[42,43,44,45,46,47]);
-    const eyesOpen = clamp((earL+earR)/2 * 12, 0, 1);
-
-    const nose = p[30], left=p[2], right=p[14], top=p[27], bottom=p[8];
-    const cx=(left.x+right.x)/2, cy=(top.y+bottom.y)/2;
-    const yaw  = clamp((nose.x-cx)/(Math.abs(right.x-left.x)+1e-5), -0.6, 0.6);
-    const pitch= clamp((nose.y-cy)/(Math.abs(bottom.y-top.y)+1e-5), -0.6, 0.6);
-
-    const gazeX = clamp(0.5 + yaw * -0.9, 0, 1);
-    const gazeY = clamp(0.5 + pitch *  0.9, 0, 1);
-
-    let jitter=0; if (lastNose) jitter=Math.hypot(nose.x-lastNose.x, nose.y-lastNose.y);
-    lastNose = {x:nose.x,y:nose.y};
-    return { eyesOpen, gazeX, gazeY, jitter };
-  }
-  function valenceFromExpr(e){
-    const pos = e.happy||0, neg=(e.angry||0)+(e.sad||0)+(e.disgusted||0);
-    return clamp(pos - neg, -1, 1);
-  }
-  function arousalFromExpr(e){
-    const act = (e.surprised||0) + (e.fearful||0) + (e.angry||0) + (e.happy||0)*0.5;
-    return clamp(act, 0, 1);
-  }
-  const attentionScore = eyesOpen => clamp(eyesOpen,0,1);
-
-  // Windows/deltas
-  const SAMPLE_MS = 150, BASELINE_PRE=[2.0,0.5], RESP_DUR=2.0;
-  function windowSlice(t0,t1){ return stream.filter(r=>r.t>=t0 && r.t<t1); }
-  function windowStats(t0,t1,key){
-    const rows = windowSlice(t0,t1);
-    const arr = rows.map(r=>r[key]);
-    return { mean: mean(arr), peak: peak(arr), std: stdev(arr) };
-  }
-  function deltaFeature(te, key){
-    const base0 = te - BASELINE_PRE[0], base1 = te - BASELINE_PRE[1];
-    const base = windowStats(base0, base1, key);
-    const resp = windowStats(te, te + RESP_DUR, key);
-    return { dMean: resp.mean - base.mean, dPeak: resp.peak - base.peak, base, resp };
-  }
-
-  // KPI (ROI-free)
-  function engagementIndexSimple(t0, dur){
-    const eyes = windowStats(t0, t0+dur, 'att').mean;
-    const jit = stdev(windowSlice(t0, t0+dur).map(r=>r.jitter));
-    const jitterN = Math.max(0, 1 - (jit/2.0));
-    return 0.7*eyes + 0.3*jitterN;
-  }
-  function computeKPIs(winLogo, winPack, winCTA){
-    const tLogo = winLogo[0], tPack = winPack[0], tCTA = winCTA[0];
-    const dV_logo = deltaFeature(tLogo, 'val');
-    const dV_pack = deltaFeature(tPack, 'val');
-    const smile_logo_peak = windowStats(tLogo, tLogo+RESP_DUR, 'pos').peak;
-    const neg_logo_peak   = windowStats(tLogo, tLogo+RESP_DUR, 'neg').peak;
-
-    const baseAll = windowStats(0, Math.max(0.1, tLogo), 'val');
-    const z = (x, m=baseAll.mean, s=0.25)=> s>1e-6 ? (x-m)/s : 0;
-
-    const PR = 100/(1+Math.exp(-(
-      0.95*z(dV_logo.dMean) +
-      0.55*z(dV_pack.dMean) +
-      0.45*z(smile_logo_peak, 0.15, 0.2) -
-      0.45*z(neg_logo_peak, 0.1, 0.2)
-    )));
-    const dA_logo = deltaFeature(tLogo, 'aro').dMean;
-    const AWR = 100/(1+Math.exp(-( 0.9*z(dA_logo) )));
-    const wCTA = windowStats(tCTA, tCTA+Math.max(2.5, RESP_DUR), 'val');
-    const v_cta = wCTA.mean, v_cta_pk = wCTA.peak;
-    const eng_cta = engagementIndexSimple(tCTA, Math.max(2.5, RESP_DUR));
-    const neg_cta = windowStats(tCTA, tCTA+Math.max(2.5, RESP_DUR), 'neg').peak;
-    const PI = 100/(1+Math.exp(-(
-      0.85*z(v_cta,  0, 0.3) +
-      0.55*z(eng_cta, 0.3, 0.25) +
-      0.35*z(v_cta_pk,0.15,0.2) -
-      0.55*z(neg_cta, 0.1, 0.2)
-    )));
-    return { PR:+PR.toFixed(1), AWR:+AWR.toFixed(1), PI:+PI.toFixed(1) };
-  }
-
-  // Export
-  function toCSV(rows){
-    const header = ['t','att','val','aro','pos','neg','gazeX','gazeY','jitter','face'];
-    const lines = [header.join(',')];
-    rows.forEach(r => lines.push([r.t,r.att,r.val,r.aro,r.pos,r.neg,r.gazeX,r.gazeY,r.jitter,r.face].map(x=>typeof x==='number'?x.toFixed(4):x).join(',')));
-    return lines.join('\n');
-  }
-  function download(name, text, type='text/plain'){
-    const blob = new Blob([text], {type});
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob); a.download = name; a.click();
-    URL.revokeObjectURL(a.href);
-  }
-
-  // Model probe + load (AUTO on page load)
-  async function probe(file){
-    const full = `${MODEL_URL}/${file}`;
-    diag('Probing', full);
-    const r = await fetch(full, { cache:'no-store' });
-    if(!r.ok) throw new Error(`PROBE ${r.status}: ${full}`);
-    return full;
-  }
-  async function loadModels(){
-    try{
-      log('Probing model files…');
-      await probe('tiny_face_detector_model-weights_manifest.json');
-      await probe('face_landmark_68_model-weights_manifest.json');
-      await probe('face_expression_model-weights_manifest.json');
-
-      log('Loading models…');
-      await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-      await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
-      await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
-
-      modelsReady = true;
-      log('Models loaded ✔ Starting webcam…');
-      await startWebcam();
-      startSampling();
-      $('btnPlay').disabled = false;
-      $('btnTest').disabled = false;
-    }catch(e){
-      console.error(e);
-      log('Model load FAILED');
-      diag('ERROR:', e.message);
-      alert(`Model load FAILED:\n${e.message}\nCheck DIAG box for the exact URL.`);
-    }
-  }
-
-  // Webcam + sampling
   async function startWebcam(){
     const st = await navigator.mediaDevices.getUserMedia({ video:{facingMode:'user', width:{ideal:640}, height:{ideal:480}}, audio:false });
     cam.srcObject = st;
     await cam.play();
-    canv.width = cam.videoWidth || 640; canv.height = cam.videoHeight || 480;
-    cam.addEventListener('loadedmetadata', () => {
-      canv.width = cam.videoWidth || canv.width;
-      canv.height = cam.videoHeight || canv.height;
-    });
-    webcamReady = true;
-    log(`Webcam ready ${canv.width}x${canv.height}.`);
+    canv.width = cam.videoWidth || 640;
+    canv.height = cam.videoHeight || 480;
+    diag('Webcam ready', canv.width+'x'+canv.height);
+    startSampling();
   }
 
-  async function sampleOnce(){
+  function startSampling(){
+    if (samplingTimer) clearInterval(samplingTimer);
+    stream.length = 0; tick=0; pushes=0; startedAtMs = performance.now();
+    samplingTimer = setInterval(sampleOnce, SAMPLE_MS);
+    diag('Sampling started');
+  }
+
+  function stopSampling(){
+    if (samplingTimer){ clearInterval(samplingTimer); samplingTimer=null; diag('Sampling stopped'); }
+  }
+
+  function sampleOnce(){
     try{
-      const tNow = (isFinite(ad.currentTime) && ad.currentTime>0)
-        ? +ad.currentTime.toFixed(3)
-        : (startedAtMs ? ((performance.now()-startedAtMs)/1000).toFixed(3) : 0);
+      tick++; tickEl.textContent = String(tick);
 
-      const det = (modelsReady)
-        ? await faceapi
-            .detectSingleFace(cam, new faceapi.TinyFaceDetectorOptions({inputSize:224, scoreThreshold:0.2}))
-            .withFaceLandmarks().withFaceExpressions()
-        : null;
+      // 1) always increment pushes first
+      pushes++; pushesEl.textContent = String(pushes);
 
-      // draw preview
+      // 2) draw webcam on canvas so we know this runs
       ctx.clearRect(0,0,canv.width,canv.height);
       ctx.drawImage(cam, 0, 0, canv.width, canv.height);
 
-      if (det){
-        const res = faceapi.resizeResults(det, { width: canv.width, height: canv.height });
-        faceapi.draw.drawDetections(canv, res);
-        faceapi.draw.drawFaceLandmarks(canv, res);
+      // 3) push a simple placeholder sample (no models yet)
+      const t = ((performance.now() - startedAtMs)/1000).toFixed(3);
+      stream.push({ t:+t, note:'placeholder' });
+      samplesEl.textContent = String(stream.length);
 
-        const feats = featuresFromLandmarks(det);
-        const e = det.expressions || {};
-        const att = attentionScore(feats.eyesOpen);
-        const val = valenceFromExpr(e);
-        const aro = arousalFromExpr(e);
-        const pos = (e.happy||0);
-        const neg = (e.angry||0)+(e.sad||0)+(e.disgusted||0);
-
-        stream.push({ t:+tNow, att, val, aro, pos, neg, gazeX:feats.gazeX, gazeY:feats.gazeY, jitter:feats.jitter, face:1 });
-      } else {
-        // push placeholder so we never end up with 0 samples
-        stream.push({ t:+tNow, att:0, val:0, aro:0, pos:0, neg:0, gazeX:0.5, gazeY:0.5, jitter:0, face:0 });
-      }
-
-      // counters
-      pushes++; pPushes.textContent = pushes.toString();
-      pSamples.textContent = stream.length.toString();
-
-      // FPS
-      framesCount++; const now = performance.now();
-      if (now - fpsT0 > 1000){ $('fps').textContent = framesCount + ' fps'; framesCount=0; fpsT0 = now; }
-      $('samplestate').textContent = 'SAMPLING'; $('samplestate').className = 'badge ok';
-      statusEl.textContent = `Recording… samples: ${stream.length}`;
+      // 4) fps
+      frames++; const now = performance.now();
+      if (now - fpsT0 > 1000){ fpsEl.textContent = String(frames); frames=0; fpsT0 = now; }
     }catch(e){
       diag('sampleOnce error:', e.message);
     }
   }
-  function startSampling(){
-    stream.length=0; lastNose=null; pushes=0;
-    startedAtMs=performance.now();
-    if(!samplingTimer){ samplingTimer=setInterval(sampleOnce, SAMPLE_MS); setBadge(true); diag('Sampling started'); }
-  }
-  function stopSampling(){ if(samplingTimer){ clearInterval(samplingTimer); samplingTimer=null; setBadge(false); diag('Sampling stopped'); } }
 
-  // Quick webcam test (now restarts the loop explicitly)
-  $('btnTest').addEventListener('click', () => {
-    startSampling(); // <-- force restart sampling for the test
-    const iv = setInterval(()=>{ statusEl.textContent = `Testing… samples: ${stream.length}`; }, 250);
-    setTimeout(()=>{ clearInterval(iv); log(`Test done. Samples: ${stream.length}`); }, 10500);
-  });
+  window.addEventListener('error', e => diag('window.onerror:', e.message));
 
-  // Play & analyze
-  $('btnPlay').addEventListener('click', async () => {
-    const url = $('adUrl').value.trim();
-    if (!url) return log('Enter a valid Ad URL (e.g., ads/my_ad.mp4)');
-    ad.src = url;
-    try { await ad.play(); } catch(e) { log('Click the video to start playback (autoplay blocked)'); }
-    ad.onpause = () => log('Paused');
-    ad.onended = () => { stopSampling(); log('Analyzing…'); analyzeAndShow(); };
-  });
-
-  function computeKPIs(winLogo, winPack, winCTA){
-    const tLogo = winLogo[0], tPack = winPack[0], tCTA = winCTA[0];
-    const BASELINE_PRE=[2.0,0.5], RESP_DUR=2.0;
-    const mean=a=>a.length?a.reduce((x,y)=>x+y,0)/a.length:0;
-    const peak=a=>a.length?Math.max(...a):0;
-    const stdev=a=>{ if(!a.length) return 0; const m=mean(a); return Math.sqrt(a.reduce((s,x)=>s+(x-m)*(x-m),0)/a.length); };
-    const windowSlice=(t0,t1)=>stream.filter(r=>r.t>=t0 && r.t<t1);
-    const windowStats=(t0,t1,key)=>{const rows=windowSlice(t0,t1);const arr=rows.map(r=>r[key]);return {mean:mean(arr),peak:peak(arr),std:stdev(arr)};};
-    const deltaFeature=(te,key)=>{const base=windowStats(te-BASELINE_PRE[0],te-BASELINE_PRE[1],key);const resp=windowStats(te,te+RESP_DUR,key);return {dMean:resp.mean-base.mean, dPeak:resp.peak-base.peak, base, resp};};
-    const z=(x,m=0,s=0.25)=> s>1e-6 ? (x-m)/s : 0;
-
-    const dV_logo = deltaFeature(tLogo, 'val');
-    const dV_pack = deltaFeature(tPack, 'val');
-    const smile_logo_peak = windowStats(tLogo, tLogo+RESP_DUR, 'pos').peak;
-    const neg_logo_peak   = windowStats(tLogo, tLogo+RESP_DUR, 'neg').peak;
-
-    const baseAll = windowStats(0, Math.max(0.1, tLogo), 'val');
-
-    const PR = 100/(1+Math.exp(-( 0.95*z(dV_logo.dMean, baseAll.mean) + 0.55*z(dV_pack.dMean, baseAll.mean) + 0.45*z(smile_logo_peak, 0.15, 0.2) - 0.45*z(neg_logo_peak, 0.1, 0.2) )));
-    const dA_logo = deltaFeature(tLogo, 'aro').dMean;
-    const AWR = 100/(1+Math.exp(-( 0.9*z(dA_logo, baseAll.mean) )));
-    const wCTA = windowStats(tCTA, tCTA+Math.max(2.5, RESP_DUR), 'val');
-    const v_cta = wCTA.mean, v_cta_pk = wCTA.peak;
-    const eyes = windowStats(tCTA, tCTA+Math.max(2.5, RESP_DUR), 'att').mean;
-    const jit = windowSlice(tCTA, tCTA+Math.max(2.5, RESP_DUR)).map(r=>r.jitter);
-    const jitterN = Math.max(0, 1 - ( (jit.length?Math.sqrt(jit.reduce((s,x)=>s+x*x,0)/jit.length):0)/2.0));
-    const eng_cta = 0.7*eyes + 0.3*jitterN;
-    const neg_cta = windowStats(tCTA, tCTA+Math.max(2.5, RESP_DUR), 'neg').peak;
-    const PI = 100/(1+Math.exp(-( 0.85*z(v_cta,0,0.3) + 0.55*z(eng_cta,0.3,0.25) + 0.35*z(v_cta_pk,0.15,0.2) - 0.55*z(neg_cta,0.1,0.2) )));
-    return { PR:+PR.toFixed(1), AWR:+AWR.toFixed(1), PI:+PI.toFixed(1) };
-  }
-
-  function analyzeAndShow(){
-    if (!stream.length){ log('No samples captured.'); return; }
-    const [logoS, logoE] = $('logoWin').value.split(',').map(Number);
-    const [packS, packE] = $('packWin').value.split(',').map(Number);
-    const [ctaS,  ctaE ] = $('ctaWin').value.split(',').map(Number);
-    const KPIs = computeKPIs([logoS,logoE],[packS,packE],[ctaS,ctaE]);
-    $('kPR').textContent  = KPIs.PR.toString();
-    $('kAWR').textContent = KPIs.AWR.toString();
-    $('kPI').textContent  = KPIs.PI.toString();
-    log('Done. Export results below.');
-    $('btnCSV').disabled = false; $('btnJSON').disabled = false;
-  }
-
-  $('btnCSV').addEventListener('click', () => {
-    const csv = toCSV(stream);
-    download(`frames_${Date.now()}.csv`, csv, 'text/csv');
-  });
-  $('btnJSON').addEventListener('click', () => {
-    const [logoS, logoE] = $('logoWin').value.split(',').map(Number);
-    const [packS, packE] = $('packWin').value.split(',').map(Number);
-    const [ctaS,  ctaE ] = $('ctaWin').value.split(',').map(Number);
-    const KPIs = computeKPIs([logoS,logoE],[packS,packE],[ctaS,ctaE]);
-    const out = { meta:{ ts:Date.now(), ad:$('adUrl').value }, kpi: KPIs, frames: stream };
-    download(`report_${Date.now()}.json`, JSON.stringify(out,null,2), 'application/json');
-  });
-
-  window.addEventListener('error', (e)=>{ diag('window.onerror:', e.message); });
-
-  // -------- AUTO START: load models on page load --------
   (async () => {
-    log('Booting…');
-    try { await loadModels(); } catch(_) {}
+    try { await startWebcam(); } catch(e){ diag('webcam error:', e.message); alert('Camera error: '+e.message); }
   })();
 </script>
 </body>
