@@ -3,20 +3,24 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Emotion-Only Ad Test — Live KPIs</title>
+<title>Emotion-Only Ad Test — Live KPIs + Branded Report</title>
 <style>
+  :root { color-scheme: dark; }
   body { font-family: system-ui, Arial, sans-serif; margin:16px; background:#0f1115; color:#fff; }
   .row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start}
   .panel{flex:1 1 360px;border:1px solid #222;border-radius:10px;padding:12px;background:#131722}
-  label{display:block;margin-top:8px;font-weight:600}
-  input[type="text"]{width:100%;padding:8px 10px;border-radius:8px;border:1px solid #333;background:#161a26;color:#fff}
+  label{display:block;margin-top:10px;font-weight:600}
+  input[type="text"], input[type="url"]{width:100%;padding:8px 10px;border-radius:8px;border:1px solid #333;background:#161a26;color:#fff}
   button{padding:10px 14px;border:0;border-radius:10px;background:#2a2f3d;color:#fff;cursor:pointer}
   button:disabled{opacity:.55;cursor:not-allowed}
-  video,canvas{width:100%;border-radius:10px;background:#000}
+  video{width:100%;border-radius:10px;background:#000}
+  .camWrap{position:relative}
+  canvas#overlay{position:absolute;inset:0;width:100%;height:100%;border-radius:10px;pointer-events:none}
   #diag{white-space:pre-wrap;font:12px ui-monospace;max-height:280px;overflow:auto;background:#0d1220;border:1px solid #222;border-radius:8px;padding:8px;margin-top:10px}
   .kpi{display:flex;gap:10px;margin-top:10px}
   .kpi>div{flex:1 1 0;background:#101520;border:1px solid #222;border-radius:10px;padding:10px;text-align:center}
   .pill{display:inline-block;padding:2px 8px;border-radius:8px;background:#1f2433;margin-left:8px;font:12px ui-monospace}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.18.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
@@ -29,15 +33,24 @@
 </h2>
 
 <div class="row">
-  <div class="panel" style="flex:1 1 560px;">
-    <label>Ad URL (MP4 — repo path OK)</label>
-    <input id="adUrl" type="text" value="ads/0813.mp4" />
+  <!-- LEFT: Capture + Controls -->
+  <div class="panel" style="flex:1 1 620px;">
+    <div class="grid2">
+      <div>
+        <label>Model Path (folder with face-api models)</label>
+        <input id="modelPath" type="text" value="models" placeholder="e.g., models or /your-repo/models" />
+      </div>
+      <div>
+        <label>Ad URL (MP4 — repo path OK)</label>
+        <input id="adUrl" type="text" value="ads/0813.mp4" />
+      </div>
+    </div>
 
     <div class="row" style="margin-top:10px;">
-      <div style="flex:1 1 380px;">
+      <div style="flex:1 1 420px;min-width:300px">
         <video id="ad" controls playsinline></video>
       </div>
-      <div style="flex:1 1 220px;position:relative">
+      <div class="camWrap" style="flex:1 1 260px;min-width:240px">
         <video id="cam" autoplay muted playsinline></video>
         <canvas id="overlay"></canvas>
       </div>
@@ -62,20 +75,40 @@
     <div id="diag">DIAG:\n</div>
   </div>
 
-  <div class="panel" style="flex:1 1 320px;">
+  <!-- RIGHT: Branded Report Config -->
+  <div class="panel" style="flex:1 1 380px;">
+    <b>Report Config (Optional)</b>
+    <p style="color:#9aa3b2;margin:6px 0 10px">Set time ranges for brand moments and (optionally) image URLs to display in the report.</p>
+
+    <label>Brand Logo time (mm:ss-mm:ss)</label>
+    <input id="logoRange" type="text" placeholder="00:02-00:04" />
+    <label>Brand Logo image URL (optional)</label>
+    <input id="logoImg" type="url" placeholder="/assets/logo.png" />
+
+    <label>CTA time (mm:ss-mm:ss)</label>
+    <input id="ctaRange" type="text" placeholder="00:12-00:15" />
+    <label>CTA image URL (optional)</label>
+    <input id="ctaImg" type="url" placeholder="/assets/cta.png" />
+
+    <label>Packshot time (mm:ss-mm:ss)</label>
+    <input id="packRange" type="text" placeholder="00:18-00:22" />
+    <label>Packshot image URL (optional)</label>
+    <input id="packImg" type="url" placeholder="/assets/packshot.png" />
+
+    <hr style="border:0;border-top:1px solid #23283a;margin:12px 0" />
     <b>Tips</b>
     <ul style="color:#9aa3b2">
       <li>Click <b>Start webcam</b> — allow camera in the browser prompt (lock icon → Allow).</li>
-      <li>Click <b>Load models</b> — you should see three Probe lines then “MODELS: OK”.</li>
-      <li>Click <b>Play & analyze</b> — ad plays, box+landmarks draw, DIAG prints live emotions.</li>
+      <li>Click <b>Load models</b> — ensure three Probe lines and “MODELS: OK”.</li>
+      <li>Click <b>Play & analyze</b> — ad plays, detections draw; DIAG shows emotions.</li>
+      <li>If no face is detected for 3s, DIAG prints suggestions (lighting, distance, model path).</li>
     </ul>
   </div>
 </div>
 
 <script>
-  // ===== Paths / settings =====
-  const MODEL_URL = '/Emotion-Ai-/models';
-  const SAMPLE_MS = 200;
+  // ===== Settings =====
+  const SAMPLE_MS = 200; // ~5 Hz
 
   // ===== DOM =====
   const $ = id => document.getElementById(id);
@@ -85,67 +118,63 @@
   const pFramesEl=$('pFrames'), pFacesEl=$('pFaces');
 
   // ===== State =====
+  let MODEL_URL = '';
   let modelsReady=false, webcamReady=false;
   let timer=null;
-  const frames=[]; // per-frame emotions
+  const frames=[]; // per-sample rows
   let faceFrames=0;
+  let lastFaceAt=0;
 
   // ===== Utils & DIAG =====
   const log = (...a)=> statusEl.textContent = a.join(' ');
-  const diag = (...a)=> { console.log('[diag]',...a); diagEl.textContent += a.join(' ') + '\n'; };
+  const diag = (...a)=> { console.log('[diag]',...a); diagEl.textContent += a.join(' ') + '\n'; diagEl.scrollTop = diagEl.scrollHeight; };
   const clamp=(x,a,b)=>Math.min(b,Math.max(a,x));
+  const nowMs = ()=> performance.now();
+
   function updateReady(label=''){
     const ready = (webcamReady===true) && (modelsReady===true);
     $('btnPlay').disabled = !ready;
     diag(`READY? ${ready} (webcamReady=${webcamReady} modelsReady=${modelsReady}) ${label}`);
   }
-  window.addEventListener('error', e => {
-    diag(`JS ERROR: ${e.message} @ ${e.filename}:${e.lineno}`);
-  });
-  window.addEventListener('unhandledrejection', e => {
-    diag(`Promise REJECTION: ${e.reason}`);
-  });
+  window.addEventListener('error', e => { diag(`JS ERROR: ${e.message} @ ${e.filename}:${e.lineno}`); });
+  window.addEventListener('unhandledrejection', e => { diag(`Promise REJECTION: ${e.reason}`); });
+
+  function parseTime(t){
+    if(!t) return null;
+    if(/^\d+(\.\d+)?$/.test(t)) return parseFloat(t);
+    const m = t.match(/^(\d{1,2}):(\d{2})(?:\.(\d+))?$/);
+    if(!m) return null;
+    const mm=+m[1], ss=+m[2], frac=m[3]?parseFloat('0.'+m[3]):0; return mm*60+ss+frac;
+  }
+  function parseRange(r){
+    if(!r) return null; const m=r.split('-'); if(m.length!==2) return null; const s=parseTime(m[0].trim()), e=parseTime(m[1].trim()); if(isNaN(s)||isNaN(e)||e<=s) return null; return {start:s,end:e};
+  }
 
   // ===== Webcam =====
   async function startWebcam(){
     try{
       diag('Requesting webcam… (if nothing happens, click the lock icon → Allow camera)');
-      if (navigator.permissions && navigator.permissions.query) {
-        try {
-          const p = await navigator.permissions.query({ name: 'camera' });
-          diag('Camera permission state:', p.state);
-          p.onchange = () => diag('Camera permission changed to:', p.state);
-        } catch {}
-      }
-      const pendingTimer = setTimeout(()=>diag('Still waiting for camera… Click the lock icon → Allow'), 5000);
-
-      const st = await navigator.mediaDevices.getUserMedia({
-        video:{facingMode:'user', width:{ideal:640}, height:{ideal:480}}, audio:false
-      });
-      clearTimeout(pendingTimer);
-
+      try { if(navigator.permissions?.query){ const p = await navigator.permissions.query({ name: 'camera' }); diag('Camera permission state:', p.state); p.onchange=()=>diag('Camera permission changed to:', p.state); } } catch {}
+      const warnTimer = setTimeout(()=>diag('Still waiting for camera… Tips: good lighting, face centered, allow camera access'), 5000);
+      const st = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:{ideal:640}, height:{ideal:480} }, audio:false });
+      clearTimeout(warnTimer);
       cam.srcObject = st; await cam.play();
       await new Promise(r => cam.onloadedmetadata = r);
-      canv.width = cam.videoWidth || 640; canv.height = cam.videoHeight || 480;
-
+      // size overlay to actual video dimensions
+      const W = cam.videoWidth || 640, H = cam.videoHeight || 480; canv.width = W; canv.height = H;
       webcamReady = true; window.webcamReady = true;
       log(`Webcam ready ${canv.width}x${canv.height}`);
-      $('btnLoad').disabled = false;
-      updateReady('[after webcam]');
-    }catch(e){
-      diag('webcam error:', e?.message || e);
-      alert('Camera error: ' + (e?.message || e));
-    }
+      $('btnLoad').disabled = false; updateReady('[after webcam]');
+    }catch(e){ diag('webcam error:', e?.message || e); alert('Camera error: ' + (e?.message || e)); }
   }
 
   // ===== Models =====
   async function loadModels(){
     try{
+      MODEL_URL = ($('modelPath').value || 'models').replace(/\/$/,'');
       const probe = async f => {
-        const url = `${MODEL_URL}/${f}?v=${Date.now()}`;
-        diag('Probe:', url);
-        const r = await fetch(url, { cache:'no-store' });
-        if(!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
+        const url = `${MODEL_URL}/${f}?v=${Date.now()}`; diag('Probe:', url);
+        const r = await fetch(url, { cache:'no-store' }); if(!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
       };
       await probe('tiny_face_detector_model-weights_manifest.json');
       await probe('face_landmark_68_model-weights_manifest.json');
@@ -155,23 +184,17 @@
       await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
       await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
       await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
-      modelsReady = true; window.modelsReady = true;
-      diag('MODELS: OK ✔ tinyFace + landmarks68 + expressions');
-      updateReady('[after models]');
-    }catch(e){
-      diag('Model load ERROR:', e?.message || e);
-      log('Model load failed — check DIAG URLs');
-    }
+      modelsReady = true; window.modelsReady = true; diag('MODELS: OK ✔ tinyFace + landmarks68 + expressions'); updateReady('[after models]');
+    }catch(e){ diag('Model load ERROR:', e?.message || e); log('Model load failed — check DIAG URLs & model path'); }
   }
 
-  // ===== Detection (aggressive) =====
+  // ===== Detection (aggressive + hints) =====
   async function detectOnce(videoEl){
     const tries = [
-      { inputSize: 320, scoreThreshold: 0.12 },
-      { inputSize: 256, scoreThreshold: 0.12 },
-      { inputSize: 224, scoreThreshold: 0.10 },
-      { inputSize: 192, scoreThreshold: 0.08 },
-      { inputSize: 160, scoreThreshold: 0.06 }
+      { inputSize: 384, scoreThreshold: 0.08 },
+      { inputSize: 320, scoreThreshold: 0.08 },
+      { inputSize: 256, scoreThreshold: 0.06 },
+      { inputSize: 224, scoreThreshold: 0.06 }
     ];
     for (const opt of tries){
       const res = await faceapi
@@ -196,38 +219,34 @@
         const r = faceapi.resizeResults(det, { width: canv.width, height: canv.height });
         faceapi.draw.drawDetections(canv, r);
         faceapi.draw.drawFaceLandmarks(canv, r);
-
         const e = det.expressions || {};
         row.happy=+(e.happy||0); row.sad=+(e.sad||0); row.angry=+(e.angry||0);
         row.disgusted=+(e.disgusted||0); row.fearful=+(e.fearful||0);
         row.surprised=+(e.surprised||0); row.neutral=+(e.neutral||0);
-        row.face=1;
-
-        faceFrames++; pFacesEl.textContent=String(faceFrames);
-        if (faceFrames % 20 === 0) diag(`faces so far: ${faceFrames} / frames ${frames.length}`);
-        diag(`expr t=${row.t.toFixed(2)} happy=${row.happy.toFixed(2)} sad=${row.sad.toFixed(2)} ang=${row.angry.toFixed(2)} dis=${row.disgusted.toFixed(2)} surp=${row.surprised.toFixed(2)} fear=${row.fearful.toFixed(2)}`);
+        row.face=1; faceFrames++; pFacesEl.textContent=String(faceFrames); lastFaceAt = nowMs();
       }
     }
     frames.push(row); pFramesEl.textContent=String(frames.length);
+
+    // If no face for 3s, print guidance once per second
+    if (nowMs() - lastFaceAt > 3000){
+      if (Math.floor((nowMs()-lastFaceAt)/1000)%1===0) {
+        diag('No face detected recently → Tips: move closer, center face, add lighting, check model path (', $('modelPath').value, ')');
+      }
+    }
   }
 
   // ===== KPIs =====
   function calcKPIs(){
     const valid = frames.filter(f=>f.face);
     const total = valid.length || 1;
-
     const posFrames = valid.filter(f => (f.happy>0.30) || (f.surprised>0.30)).length;
     const negFrames = valid.filter(f => (f.sad>0.30) || (f.angry>0.30) || (f.disgusted>0.30)).length;
     const awareFrames = valid.filter(f => (f.happy>0.15)||(f.sad>0.15)||(f.angry>0.15)||(f.surprised>0.15)||(f.fearful>0.15)).length;
-
     const PI  = clamp( (posFrames/total)*100, 0, 100 );
     const BP  = clamp( ((posFrames - negFrames)/total)*100 + 50, 0, 100 );
     const AWR = clamp( (awareFrames/total)*100, 0, 100 );
-
-    piEl.textContent  = PI.toFixed(1);
-    bpEl.textContent  = BP.toFixed(1);
-    awrEl.textContent = AWR.toFixed(1);
-
+    piEl.textContent  = PI.toFixed(1); bpEl.textContent  = BP.toFixed(1); awrEl.textContent = AWR.toFixed(1);
     return { PI:+PI.toFixed(1), BP:+BP.toFixed(1), AWR:+AWR.toFixed(1) };
   }
 
@@ -244,49 +263,56 @@
   }
 
   // ===== Report builder =====
-  function fmtTs(s){
-    const mm = Math.floor(s/60); const ss = Math.floor(s%60);
-    return `${mm.toString().padStart(2,'0')}:${ss.toString().padStart(2,'0')}`;
+  function fmtTs(s){ const mm = Math.floor(s/60); const ss = Math.floor(s%60); return `${mm.toString().padStart(2,'0')}:${ss.toString().padStart(2,'0')}`; }
+  function avg(arr){ return arr.length? arr.reduce((a,b)=>a+b,0)/arr.length : 0; }
+
+  function statsForRange(frames, range){
+    if(!range) return null; const sub = frames.filter(f=>f.face && f.t>=range.start && f.t<=range.end);
+    const ems=['happy','sad','angry','disgusted','fearful','surprised','neutral'];
+    const avgEmo=Object.fromEntries(ems.map(k=>[k, avg(sub.map(v=>+v[k]||0))]));
+    const total=sub.length||1;
+    const pos=sub.filter(f=>(f.happy>0.30)||(f.surprised>0.30)).length;
+    const neg=sub.filter(f=>(f.sad>0.30)||(f.angry>0.30)||(f.disgusted>0.30)).length;
+    const aware=sub.filter(f=>(f.happy>0.15)||(f.sad>0.15)||(f.angry>0.15)||(f.surprised>0.15)||(f.fearful>0.15)).length;
+    const PI=clamp((pos/total)*100,0,100), BP=clamp(((pos-neg)/total)*100+50,0,100), AWR=clamp((aware/total)*100,0,100);
+    return { count: sub.length, avgEmo, PI:+PI.toFixed(1), BP:+BP.toFixed(1), AWR:+AWR.toFixed(1) };
   }
-  function avg(arr){ return arr.reduce((a,b)=>a+b,0)/(arr.length||1); }
 
   function buildStats(frames){
     const valid = frames.filter(f=>f.face);
-    const ems = ['happy','sad','angry','disgusted','fearful','surprised','neutral'];
-    const avgEmo = Object.fromEntries(ems.map(k=>[k, avg(valid.map(v=>+v[k]||0))]));
-
-    // Peaks (top 5 by positivity / negativity)
-    const scored = valid.map(v=>({
-      t:v.t,
-      pos:(v.happy||0) + 0.6*(v.surprised||0),
-      neg:(v.sad||0) + (v.angry||0) + 0.8*(v.disgusted||0)
-    }));
-    const topPos = [...scored].sort((a,b)=>b.pos-a.pos).slice(0,5);
-    const topNeg = [...scored].sort((a,b)=>b.neg-a.neg).slice(0,5);
-
-    // Engagement segments (emotion above awareness threshold 0.15)
+    const ems=['happy','sad','angry','disgusted','fearful','surprised','neutral'];
+    const avgEmo=Object.fromEntries(ems.map(k=>[k, avg(valid.map(v=>+v[k]||0))]));
+    const scored=valid.map(v=>({ t:v.t, pos:(v.happy||0)+0.6*(v.surprised||0), neg:(v.sad||0)+(v.angry||0)+0.8*(v.disgusted||0) }));
+    const topPos=[...scored].sort((a,b)=>b.pos-a.pos).slice(0,5);
+    const topNeg=[...scored].sort((a,b)=>b.neg-a.neg).slice(0,5);
     const segs=[]; let cur=null;
-    valid.forEach(v=>{
-      const engaged = (v.happy>0.15)||(v.sad>0.15)||(v.angry>0.15)||(v.surprised>0.15)||(v.fearful>0.15);
-      if(engaged && !cur){ cur={start:v.t, end:v.t, peakPos:0}; }
+    valid.forEach(v=>{ const engaged=(v.happy>0.15)||(v.sad>0.15)||(v.angry>0.15)||(v.surprised>0.15)||(v.fearful>0.15);
+      if(engaged && !cur){ cur={start:v.t,end:v.t,peakPos:0}; }
       if(engaged && cur){ cur.end=v.t; const ps=(v.happy||0)+0.6*(v.surprised||0); if(ps>cur.peakPos) cur.peakPos=ps; }
       if(!engaged && cur){ segs.push(cur); cur=null; }
     });
     if(cur) segs.push(cur);
-    const topSegs = segs.map(s=>({ start:s.start, end:s.end, dur:Math.max(0,(s.end-s.start)), peakPos:s.peakPos }))
+    const topSegs = segs.map(s=>({start:s.start,end:s.end,dur:Math.max(0,(s.end-s.start)),peakPos:s.peakPos}))
                         .sort((a,b)=>b.dur-a.dur).slice(0,5);
-
     return { validCount:valid.length, totalCount:frames.length, avgEmo, topPos, topNeg, topSegs };
   }
 
-  function buildReportHTML(meta, kpi, frames){
+  function cardKV(title, valueHtml){ return `<div class="card"><div class="muted">${title}</div><div style="font-size:28px">${valueHtml}</div></div>`; }
+
+  function buildReportHTML(meta, kpi, frames, segments){
     const stats = buildStats(frames);
     const facePct = ((stats.validCount/Math.max(1,stats.totalCount))*100).toFixed(1);
-    const em = stats.avgEmo;
     const ts = new Date(meta.ts||Date.now()).toLocaleString();
 
-    function liPeak(p){ return `<li><b>${fmtTs(p.t)}</b> — score: ${p.pos?p.pos.toFixed(2):p.neg.toFixed(2)}</li>`; }
+    function liPeak(p){ return `<li><b>${fmtTs(p.t)}</b> — score: ${(p.pos??p.neg).toFixed(2)}</li>`; }
     function liSeg(s){ return `<li><b>${fmtTs(s.start)}</b> → <b>${fmtTs(s.end)}</b> (${s.dur.toFixed(1)}s), peak positive ${s.peakPos.toFixed(2)}</li>`; }
+    function emoGrid(avg){
+      return `<div class="kpis">${Object.entries(avg).map(([k,v])=>`<div class="card"><div class="muted">${k}</div><div style="font-size:22px">${(+v).toFixed(3)}</div></div>`).join('')}</div>`;
+    }
+
+    const logo = segments.logo?.range ? statsForRange(frames, segments.logo.range) : null;
+    const cta  = segments.cta?.range  ? statsForRange(frames, segments.cta.range)  : null;
+    const pack = segments.pack?.range ? statsForRange(frames, segments.pack.range) : null;
 
     const html = `<!doctype html>
 <html>
@@ -302,6 +328,8 @@
   ul{margin:8px 0 0 18px}
   code{background:#0b1020;padding:2px 6px;border-radius:6px}
   details{margin-top:12px}
+  img.asset{max-width:320px;border-radius:10px;border:1px solid #1f2937;background:#0b1020}
+  .row{display:flex;flex-wrap:wrap;gap:12px}
 </style>
 </head>
 <body>
@@ -310,16 +338,14 @@
   <p class="muted">Ad: <code>${meta.ad||''}</code></p>
 
   <div class="kpis">
-    <div class="card"><div class="muted">Purchase Intention</div><div style="font-size:28px">${kpi.PI}</div></div>
-    <div class="card"><div class="muted">Brand Perception</div><div style="font-size:28px">${kpi.BP}</div></div>
-    <div class="card"><div class="muted">Awareness</div><div style="font-size:28px">${kpi.AWR}</div></div>
-    <div class="card"><div class="muted">Face-tracked frames</div><div style="font-size:28px">${stats.validCount} / ${stats.totalCount} (${facePct}%)</div></div>
+    ${cardKV('Purchase Intention', kpi.PI)}
+    ${cardKV('Brand Perception', kpi.BP)}
+    ${cardKV('Awareness', kpi.AWR)}
+    ${cardKV('Face-tracked frames', `${stats.validCount} / ${stats.totalCount} (${facePct}%)`)}
   </div>
 
-  <h2>Emotion Averages</h2>
-  <div class="kpis">
-    ${Object.entries(em).map(([k,v])=>`<div class=\"card\"><div class=\"muted\">${k}</div><div style=\"font-size:22px\">${v.toFixed(3)}</div></div>`).join('')}
-  </div>
+  <h2>Emotion Averages (Whole Ad)</h2>
+  ${emoGrid(stats.avgEmo)}
 
   <h2>Highlights</h2>
   <div class="kpis">
@@ -327,6 +353,31 @@
     <div class="card"><b>Top Negative Moments</b><ul>${stats.topNeg.map(liPeak).join('')}</ul></div>
     <div class="card"><b>Longest Engaged Segments</b><ul>${stats.topSegs.map(liSeg).join('')}</ul></div>
   </div>
+
+  ${(logo||cta||pack)?`<h2>Branded Moments</h2>`:''}
+  ${logo?`
+  <div class="card">
+    <b>Brand Logo</b> <span class="muted">${fmtTs(segments.logo.range.start)}–${fmtTs(segments.logo.range.end)}</span>
+    ${segments.logo.img?`<div class="row"><img class="asset" src="${segments.logo.img}" alt="Brand logo"/></div>`:''}
+    <div class="kpis">${cardKV('PI', logo.PI)}${cardKV('BP', logo.BP)}${cardKV('AWR', logo.AWR)}${cardKV('Frames', logo.count)}</div>
+    ${emoGrid(logo.avgEmo)}
+  </div>`:''}
+
+  ${cta?`
+  <div class="card" style="margin-top:12px">
+    <b>CTA</b> <span class="muted">${fmtTs(segments.cta.range.start)}–${fmtTs(segments.cta.range.end)}</span>
+    ${segments.cta.img?`<div class="row"><img class="asset" src="${segments.cta.img}" alt="CTA"/></div>`:''}
+    <div class="kpis">${cardKV('PI', cta.PI)}${cardKV('BP', cta.BP)}${cardKV('AWR', cta.AWR)}${cardKV('Frames', cta.count)}</div>
+    ${emoGrid(cta.avgEmo)}
+  </div>`:''}
+
+  ${pack?`
+  <div class="card" style="margin-top:12px">
+    <b>Packshot</b> <span class="muted">${fmtTs(segments.pack.range.start)}–${fmtTs(segments.pack.range.end)}</span>
+    ${segments.pack.img?`<div class="row"><img class="asset" src="${segments.pack.img}" alt="Packshot"/></div>`:''}
+    <div class="kpis">${cardKV('PI', pack.PI)}${cardKV('BP', pack.BP)}${cardKV('AWR', pack.AWR)}${cardKV('Frames', pack.count)}</div>
+    ${emoGrid(pack.avgEmo)}
+  </div>`:''}
 
   <details>
     <summary>Raw frames JSON</summary>
@@ -342,21 +393,16 @@
   $('btnLoad').addEventListener('click', loadModels);
 
   $('btnPlay').addEventListener('click', async () => {
-    frames.length = 0; faceFrames = 0; pFacesEl.textContent='0'; pFramesEl.textContent='0';
+    frames.length = 0; faceFrames = 0; pFacesEl.textContent='0'; pFramesEl.textContent='0'; lastFaceAt = nowMs();
     ad.src = ($('adUrl').value || '').trim() || 'ads/0813.mp4';
 
-    try {
-      await ad.play();
-    } catch (e) {
-      diag('Autoplay blocked, retrying muted…');
-      ad.muted = true;
-      try { await ad.play(); }
-      catch (_) { log('Click the video once to start playback, then click Play & analyze again.'); return; }
+    try { await ad.play(); }
+    catch (e) {
+      diag('Autoplay blocked, retrying muted…'); ad.muted = true; try { await ad.play(); } catch { log('Click the video to start, then click Play & analyze again.'); return; }
     }
 
     if (timer) clearInterval(timer);
-    timer = setInterval(tick, SAMPLE_MS);
-    log('Analyzing…');
+    timer = setInterval(tick, SAMPLE_MS); log('Analyzing…');
   });
 
   ad.addEventListener('ended', () => {
@@ -368,34 +414,29 @@
 
   $('btnCSV').addEventListener('click', () => download(`frames_${Date.now()}.csv`, framesCSV(frames), 'text/csv'));
   $('btnJSON').addEventListener('click', () => {
-    const k = calcKPIs();
-    const report = { meta:{ ts:Date.now(), ad:$('adUrl').value }, kpi:k, frames };
+    const k = calcKPIs(); const report = { meta:{ ts:Date.now(), ad:$('adUrl').value }, kpi:k, frames };
     download(`report_${Date.now()}.json`, JSON.stringify(report, null, 2), 'application/json');
   });
 
-  // Generate HTML report
   $('btnReport').addEventListener('click', () => {
-    const k = calcKPIs();
-    const meta = { ts: Date.now(), ad: $('adUrl').value };
-    const html = buildReportHTML(meta, k, frames);
+    const k = calcKPIs(); const meta = { ts: Date.now(), ad: $('adUrl').value };
+    const segments = {
+      logo: { range: parseRange(($('logoRange').value||'').trim()), img: ($('logoImg').value||'').trim() },
+      cta:  { range: parseRange(($('ctaRange').value||'').trim()),  img: ($('ctaImg').value||'').trim() },
+      pack: { range: parseRange(($('packRange').value||'').trim()), img: ($('packImg').value||'').trim() }
+    };
+    const html = buildReportHTML(meta, k, frames, segments);
     download(`emotion_report_${Date.now()}.html`, html, 'text/html');
   });
 
   // ===== Boot =====
   (async () => {
     diagEl.textContent = 'DIAG:\nPage loaded. Booting…\n';
-    loadModels();
-    setTimeout(() => {
-      if (webcamReady && modelsReady) {
-        const btn = $('btnPlay');
-        if (btn && btn.disabled) {
-          btn.disabled = false;
-          diag('WARN: Forcing Play button enabled (both ready).');
-        }
-      }
-    }, 3000);
+    // don't auto-start webcam (needs user gesture), but allow model preload
+    $('modelPath').addEventListener('change', ()=>{ modelsReady=false; $('btnLoad').disabled=false; });
+    // You may preload models if you want: uncomment next line
+    // loadModels();
   })();
 </script>
 </body>
 </html>
-
