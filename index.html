@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Emotion Ad Test — PR / AWR / PI · v4.4</title>
+<title>Emotion Ad Test — Report (PI / Brand / Emotions) · v5.0</title>
 <style>
   :root { color-scheme: dark; }
   body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin:16px; background:#0f1115; color:#fff; }
@@ -20,7 +20,7 @@
   .muted { color:#9aa3b2; font-size:12px; }
   .badge { display:inline-block; padding:2px 8px; border-radius:8px; font-size:12px; background:#7c2d12; margin-left:8px; }
   .ok { background:#14532d; }
-  #diag { font:12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space:pre-wrap; color:#cbd5e1; margin-top:8px; max-height:260px; overflow:auto; border:1px solid #222; border-radius:8px; padding:8px; background:#0d1220; }
+  #diag, #reportBox { font:12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space:pre-wrap; color:#cbd5e1; margin-top:8px; max-height:260px; overflow:auto; border:1px solid #222; border-radius:8px; padding:8px; background:#0d1220; }
   .pill { display:inline-block; padding:2px 6px; border-radius:6px; background:#1f2433; margin-left:6px; font:12px ui-monospace; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.18.0/dist/tf.min.js"></script>
@@ -28,16 +28,17 @@
 </head>
 <body>
 
-<h2>Emotion-Only Ad Test (Webcam → PR / AWR / PI)
+<h2>Emotion Ad Test — Webcam → Report
   <span id="samplestate" class="badge">IDLE</span>
   <span class="pill">Tick: <span id="tick">0</span></span>
   <span class="pill">pushes: <span id="pPushes">0</span></span>
   <span class="pill">samples: <span id="pSamples">0</span></span>
+  <span class="pill">fps: <span id="fps">0</span></span>
 </h2>
 
 <div class="row">
   <div class="panel" style="flex:1 1 560px;">
-    <label>Ad URL (MP4 — HTTPS or repo path like <code>ads/0813.mp4</code>)</label>
+    <label>Ad URL (MP4 — HTTPS or repo path, e.g. <code>ads/0813.mp4</code>)</label>
     <input id="adUrl" type="text" placeholder="ads/0813.mp4" />
 
     <div class="panel" style="margin-top:10px;">
@@ -50,10 +51,9 @@
 
     <div class="btns">
       <button id="btnPlay" disabled>Play & analyze</button>
-      <button id="btnCSV" disabled>Download CSV</button>
-      <button id="btnJSON" disabled>Download JSON</button>
+      <button id="btnCSV" disabled>Download CSV (frames)</button>
+      <button id="btnJSON" disabled>Download JSON (report)</button>
       <span id="status" class="muted">Booting…</span>
-      <span class="pill">fps: <span id="fps">0</span></span>
     </div>
 
     <div class="row" style="margin-top:10px;">
@@ -72,32 +72,33 @@
       <div><div class="muted">Purchase Intention</div><div id="kPI">—</div></div>
     </div>
 
+    <div id="reportBox">Report will appear here after analysis…</div>
     <div id="diag">DIAG:\n</div>
   </div>
 
   <div class="panel" style="flex:1 1 320px;">
     <b>Notes</b>
     <ul class="muted">
-      <li>Models auto-load from <code>/Emotion-Ai-/models</code>. DIAG logs the exact URLs.</li>
-      <li>Sampler starts immediately; samples go up even before models load.</li>
-      <li>Play your ad after you see “Webcam ready …”.</li>
+      <li>Models auto-load from <code>/Emotion-Ai-/models</code>. DIAG logs the exact URLs and “MODELS: OK”.</li>
+      <li>Sampler starts immediately; samples increase even before models load.</li>
+      <li>Report contains: Purchase Intention (±), Brand Perception (±), and emotion peak timestamps.</li>
     </ul>
   </div>
 </div>
 
 <script>
   // ======= CONFIG (matches your live URL) =======
-  const MODEL_URL = '/Emotion-Ai-/models'; // <-- DO NOT change for your Pages URL
+  const MODEL_URL = '/Emotion-Ai-/models'; // your GitHub Pages path
+  const SAMPLE_MS = 150, BASELINE_PRE=[2.0,0.5], RESP_DUR=2.0;
 
   // ======= DOM =======
   const $ = id => document.getElementById(id);
   const ad = $('ad'), cam = $('cam'), canv = $('overlay'), ctx = canv.getContext('2d');
-  const statusEl=$('status'), fpsEl=$('fps'), badge=$('samplestate'), diagEl=$('diag');
+  const statusEl=$('status'), fpsEl=$('fps'), badge=$('samplestate'), diagEl=$('diag'), reportEl=$('reportBox');
   const pSamples=$('pSamples'), pPushes=$('pPushes'), tickEl=$('tick');
   const kPR=$('kPR'), kAWR=$('kAWR'), kPI=$('kPI');
 
   // ======= STATE =======
-  const SAMPLE_MS = 150, BASELINE_PRE=[2.0,0.5], RESP_DUR=2.0;
   let modelsReady=false, webcamReady=false, samplingTimer=null, startedAtMs=null;
   let framesCount=0, fpsT0=performance.now(), pushes=0, tick=0;
   const stream=[]; let lastNose=null;
@@ -111,6 +112,7 @@
   const stdev=a=>{ if(!a.length) return 0; const m=mean(a); return Math.sqrt(a.reduce((s,x)=>s+(x-m)*(x-m),0)/a.length); };
   const sigmoid=x=>1/(1+Math.exp(-x));
   const parseWin = s => { const [a,b]=(s||'').split(',').map(Number); return [Number(a||0),Number(b||0)]; };
+  const inWindow = (t, w) => t>=w[0] && t<=w[1];
 
   function setBadge(active){ badge.textContent = active ? 'SAMPLING' : 'IDLE'; badge.className='badge '+(active?'ok':''); }
 
@@ -138,13 +140,19 @@
     lastNose = {x:nose.x,y:nose.y};
     return { eyesOpen, gazeX, gazeY, jitter };
   }
+
+  // map expressions to valence/arousal
   function valenceFromExpr(e){
-    const pos = e.happy||0, neg=(e.angry||0)+(e.sad||0)+(e.disgusted||0);
+    const pos = (e.happy||0) + 0.6*(e.surprised||0); // surprise tends positive in ads
+    const neg = (e.angry||0) + (e.sad||0) + (e.disgusted||0) + 0.5*(e.fearful||0);
     return clamp(pos - neg, -1, 1);
   }
   function arousalFromExpr(e){
-    const act = (e.surprised||0) + (e.fearful||0) + (e.angry||0) + (e.happy||0)*0.5;
-    return clamp(act, 0, 1);
+    return clamp((e.surprised||0)+(e.fearful||0)+(e.angry||0)+0.5*(e.happy||0), 0, 1);
+  }
+  function amusedFromExpr(e){
+    // simple proxy: co-activation of happy + surprised
+    return clamp(0.5*((e.happy||0)+(e.surprised||0)), 0, 1);
   }
 
   // ======= WINDOWS / DELTAS =======
@@ -167,31 +175,69 @@
     const jitterN = Math.max(0, 1 - (jit/2.0));
     return 0.7*eyes + 0.3*jitterN;
   }
+
   function computeKPIs(winLogo, winPack, winCTA){
     const tLogo=winLogo[0], tPack=winPack[0], tCTA=winCTA[0];
     const dV_logo = deltaFeature(tLogo, 'val');
     const dV_pack = deltaFeature(tPack, 'val');
-    const smile_logo_peak = windowStats(tLogo, tLogo+RESP_DUR, 'pos').peak;
-    const neg_logo_peak   = windowStats(tLogo, tLogo+RESP_DUR, 'neg').peak;
     const baseAll = windowStats(0, Math.max(0.1, tLogo), 'val');
     const z = (x, m=baseAll.mean, s=0.25)=> s>1e-6 ? (x-m)/s : 0;
 
-    const PR = 100/(1+Math.exp(-(0.95*z(dV_logo.dMean)+0.55*z(dV_pack.dMean)+0.45*z(smile_logo_peak,0.15,0.2)-0.45*z(neg_logo_peak,0.1,0.2))));
+    const PR = 100/(1+Math.exp(-(0.95*z(dV_logo.dMean)+0.55*z(dV_pack.dMean))));
     const dA_logo = deltaFeature(tLogo, 'aro').dMean;
     const AWR = 100/(1+Math.exp(-(0.9*z(dA_logo))));
+
+    // For PI we look at CTA window
     const wCTA = windowStats(tCTA, tCTA+Math.max(2.5, RESP_DUR), 'val');
-    const v_cta=wCTA.mean, v_cta_pk=wCTA.peak;
+    const v_cta=wCTA.mean;
     const eng_cta = engagementIndexSimple(tCTA, Math.max(2.5, RESP_DUR));
-    const neg_cta = windowStats(tCTA, tCTA+Math.max(2.5, RESP_DUR), 'neg').peak;
-    const PI = 100/(1+Math.exp(-(0.85*z(v_cta,0,0.3)+0.55*z(eng_cta,0.3,0.25)+0.35*z(v_cta_pk,0.15,0.2)-0.55*z(neg_cta,0.1,0.2))));
-    return { PR:+PR.toFixed(1), AWR:+AWR.toFixed(1), PI:+PI.toFixed(1) };
+    const PIraw = 100/(1+Math.exp(-(0.85*z(v_cta,0,0.3)+0.55*z(eng_cta,0.3,0.25))));
+    return { PR:+PR.toFixed(1), AWR:+AWR.toFixed(1), PI:+PIraw.toFixed(1) };
+  }
+
+  // ======= “Positive/Negative” splits for the report =======
+  function pct(x){ return Math.max(0, Math.min(100, +x.toFixed(1))); }
+  function posNegFromScore(score){ const pos = clamp(score,0,100); return { Positive:pct(pos), Negative:pct(100-pos) }; }
+
+  function brandPerception(winLogo, winPack){
+    // average valence over brand moments vs baseline
+    const tLogo=winLogo[0], tPack=winPack[0];
+    const base = windowStats(Math.max(0,tLogo-3), Math.max(0,tLogo-0.5), 'val').mean;
+    const brandVal = mean([
+      windowStats(winLogo[0], winLogo[1], 'val').mean,
+      windowStats(winPack[0], winPack[1], 'val').mean
+    ]);
+    const s = 100/(1+Math.exp(-( (brandVal - base) / 0.2 ))); // squashed 0–100
+    return posNegFromScore(s);
+  }
+
+  function purchaseIntention(winCTA){
+    const s = computeKPIs([0,0],[0,0],winCTA).PI; // already 0–100
+    return posNegFromScore(s);
+  }
+
+  // ======= Emotion peaks (timestamps) =======
+  function extractPeaks(emokey, threshold=0.5, minSep=0.6){
+    const out = [];
+    let last = -999;
+    for (const r of stream){
+      if (r.face && r[emokey] !== undefined && r[emokey] >= threshold){
+        if (r.t - last >= minSep){
+          out.push(+r.t.toFixed(2));
+          last = r.t;
+        }
+      }
+    }
+    return out;
   }
 
   // ======= EXPORT =======
   function toCSV(rows){
-    const header = ['t','att','val','aro','pos','neg','gazeX','gazeY','jitter','face'];
+    const header = ['t','att','val','aro','happy','sad','angry','disgusted','fearful','surprised','neutral','amused','gazeX','gazeY','jitter','face'];
     const lines = [header.join(',')];
-    rows.forEach(r => lines.push([r.t,r.att,r.val,r.aro,r.pos,r.neg,r.gazeX,r.gazeY,r.jitter,r.face].map(x=>typeof x==='number'?x.toFixed(4):x).join(',')));
+    rows.forEach(r => lines.push([
+      r.t,r.att,r.val,r.aro,r.happy,r.sad,r.angry,r.disgusted,r.fearful,r.surprised,r.neutral,r.amused,r.gazeX,r.gazeY,r.jitter,r.face
+    ].map(x=>typeof x==='number'?x.toFixed(4):x).join(',')));
     return lines.join('\n');
   }
   function download(name, text, type='text/plain'){
@@ -217,10 +263,9 @@
       await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
       await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
       modelsReady = true;
-      diag('Models loaded ✔');
+      diag('MODELS: OK ✔ tinyFace + landmarks68 + expressions');
     }catch(e){
       diag('Model load ERROR:', e.message);
-      // sampling still runs; rows will be placeholders until models load
     }
   }
 
@@ -247,25 +292,50 @@
       ctx.clearRect(0,0,canv.width,canv.height);
       ctx.drawImage(cam, 0, 0, canv.width, canv.height);
 
-      let row = { t:+tNow, att:0, val:0, aro:0, pos:0, neg:0, gazeX:0.5, gazeY:0.5, jitter:0, face:0 };
+      let row = { t:+tNow, att:0, val:0, aro:0,
+        happy:0, sad:0, angry:0, disgusted:0, fearful:0, surprised:0, neutral:0, amused:0,
+        gazeX:0.5, gazeY:0.5, jitter:0, face:0 };
 
       if (modelsReady){
-        const det = await faceapi
-          .detectSingleFace(cam, new faceapi.TinyFaceDetectorOptions({inputSize:224, scoreThreshold:0.2}))
-          .withFaceLandmarks().withFaceExpressions();
+        // robust detection: multiple tries if needed
+        const tries = [
+          { inputSize:224, scoreThreshold:0.2 },
+          { inputSize:192, scoreThreshold:0.15 },
+          { inputSize:160, scoreThreshold:0.12 },
+          { inputSize:128, scoreThreshold:0.10 }
+        ];
+        let det = null;
+        for (const opt of tries){
+          const res = await faceapi
+            .detectAllFaces(cam, new faceapi.TinyFaceDetectorOptions(opt))
+            .withFaceLandmarks()
+            .withFaceExpressions();
+          if (res && res.length){
+            det = res.reduce((best,cur)=> (cur.detection.score > (best?.detection.score||0) ? cur : best), null);
+            break;
+          }
+        }
 
         if (det){
-          const res = faceapi.resizeResults(det, { width: canv.width, height: canv.height });
-          faceapi.draw.drawDetections(canv, res);
-          faceapi.draw.drawFaceLandmarks(canv, res);
+          const resized = faceapi.resizeResults(det, { width: canv.width, height: canv.height });
+          faceapi.draw.drawDetections(canv, resized);
+          faceapi.draw.drawFaceLandmarks(canv, resized);
 
           const feats = featuresFromLandmarks(det);
           const e = det.expressions || {};
-          row.att = clamp(((feats.eyesOpen)||0),0,1);
+
+          row.happy = +(e.happy||0);
+          row.sad = +(e.sad||0);
+          row.angry = +(e.angry||0);
+          row.disgusted = +(e.disgusted||0);
+          row.fearful = +(e.fearful||0);
+          row.surprised = +(e.surprised||0);
+          row.neutral = +(e.neutral||0);
+          row.amused = amusedFromExpr(e);
+
           row.val = valenceFromExpr(e);
           row.aro = arousalFromExpr(e);
-          row.pos = (e.happy||0);
-          row.neg = (e.angry||0)+(e.sad||0)+(e.disgusted||0);
+          row.att = clamp(((feats.eyesOpen)||0),0,1);
           row.gazeX = feats.gazeX; row.gazeY = feats.gazeY; row.jitter = feats.jitter; row.face=1;
         }
       }
@@ -280,9 +350,7 @@
       if (now - fpsT0 > 1000){ fpsEl.textContent = String(framesCount); framesCount=0; fpsT0 = now; }
 
       setBadge(true); statusEl.textContent = `Recording… samples: ${stream.length}`;
-    }catch(e){
-      diag('sampleOnce error:', e.message);
-    }
+    }catch(e){ diag('sampleOnce error:', e.message); }
   }
   function startSampling(){
     if (!webcamReady) return;
@@ -303,20 +371,67 @@
     ad.onended = () => { stopSampling(); log('Analyzing…'); analyzeAndShow(); };
   });
 
-  function analyzeAndShow(){
-    if (!stream.length){ log('No samples captured.'); return; }
-    const KPIs = computeKPIs(parseWin($('logoWin').value), parseWin($('packWin').value), parseWin($('ctaWin').value));
+  function computeKPIsPublic(winLogo, winPack, winCTA){
+    const KPIs = computeKPIs(winLogo, winPack, winCTA);
     kPR.textContent = KPIs.PR.toString();
     kAWR.textContent = KPIs.AWR.toString();
     kPI.textContent = KPIs.PI.toString();
-    log('Done. Export results below.');
-    $('btnCSV').disabled = false; $('btnJSON').disabled = false;
+    return KPIs;
   }
 
+  function buildReport(){
+    const winLogo = parseWin($('logoWin').value);
+    const winPack = parseWin($('packWin').value);
+    const winCTA  = parseWin($('ctaWin').value);
+
+    // KPIs
+    const KPIs = computeKPIsPublic(winLogo, winPack, winCTA);
+    const PI = purchaseIntention(winCTA);          // {Positive, Negative}
+    const BP = brandPerception(winLogo, winPack);  // {Positive, Negative}
+
+    // emotion peaks
+    const peaks = {
+      Happy:      extractPeaks('happy', 0.55, 0.7),
+      Amused:     extractPeaks('amused', 0.45, 0.7),
+      Sad:        extractPeaks('sad', 0.55, 0.7),
+      Angry:      extractPeaks('angry', 0.55, 0.7),
+      Surprised:  extractPeaks('surprised', 0.55, 0.7)
+    };
+
+    // Optional: moments to “add” emotions (if very low presence)
+    // e.g., if Happy peaks list is empty, suggest adding a humor beat near CTA, etc.
+    const suggestions = {};
+    if (!peaks.Happy.length) suggestions.Happy = "Consider adding a smile/humor beat near CTA.";
+    if (!peaks.Amused.length) suggestions.Amused = "Add a light surprise + smile moment before packshot.";
+    if (!peaks.Surprised.length) suggestions.Surprised = "Introduce a visual reveal around the logo.";
+    // (Feel free to expand these heuristic suggestions.)
+
+    return {
+      meta: { ts: Date.now(), ad: $('adUrl').value },
+      kpi_raw: KPIs, // PR/AWR/PI numbers (0–100)
+      PurchaseIntention: PI,          // Positive / Negative %
+      BrandPerception: BP,            // Positive / Negative %
+      EmotionsToAdd: peaks,           // timestamps
+      suggestions                      // optional heuristics
+    };
+  }
+
+  function analyzeAndShow(){
+    if (!stream.length){ log('No samples captured.'); return; }
+    const report = buildReport();
+    reportEl.textContent = JSON.stringify(report, null, 2);
+
+    // enable downloads
+    $('btnCSV').disabled = false; $('btnJSON').disabled = false;
+
+    log('Report ready. You can download JSON/CSV.');
+  }
+
+  // ======= DOWNLOADS =======
   $('btnCSV').addEventListener('click', () => download(`frames_${Date.now()}.csv`, toCSV(stream), 'text/csv'));
   $('btnJSON').addEventListener('click', () => {
-    const KPIs = computeKPIs(parseWin($('logoWin').value), parseWin($('packWin').value), parseWin($('ctaWin').value));
-    download(`report_${Date.now()}.json`, JSON.stringify({ meta:{ ts:Date.now(), ad:$('adUrl').value }, kpi:KPIs, frames:stream }, null, 2), 'application/json');
+    const report = buildReport();
+    download(`report_${Date.now()}.json`, JSON.stringify(report, null, 2), 'application/json');
   });
 
   // ======= BOOT =======
