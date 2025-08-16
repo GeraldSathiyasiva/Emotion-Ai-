@@ -1,541 +1,361 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Emotion-Only Ad Test — Live KPIs + Branded Report</title>
-<style>
-  :root { color-scheme: dark; }
-  body { font-family: system-ui, Arial, sans-serif; margin:16px; background:#0f1115; color:#fff; }
-  .row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start}
-  .panel{flex:1 1 360px;border:1px solid #222;border-radius:10px;padding:12px;background:#131722}
-  label{display:block;margin-top:10px;font-weight:600}
-  input[type="text"], input[type="url"]{width:100%;padding:8px 10px;border-radius:8px;border:1px solid #333;background:#161a26;color:#fff}
-  button{padding:10px 14px;border:0;border-radius:10px;background:#2a2f3d;color:#fff;cursor:pointer}
-  button:disabled{opacity:.55;cursor:not-allowed}
-  video{width:100%;border-radius:10px;background:#000}
-  .camWrap{position:relative}
-  canvas#overlay{position:absolute;inset:0;width:100%;height:100%;border-radius:10px;pointer-events:none}
-  #diag{white-space:pre-wrap;font:12px ui-monospace;max-height:280px;overflow:auto;background:#0d1220;border:1px solid #222;border-radius:8px;padding:8px;margin-top:10px}
-  .kpi{display:flex;gap:10px;margin-top:10px}
-  .kpi>div{flex:1 1 0;background:#101520;border:1px solid #222;border-radius:10px;padding:10px;text-align:center}
-  .pill{display:inline-block;padding:2px 8px;border-radius:8px;background:#1f2433;margin-left:8px;font:12px ui-monospace}
-  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-</style>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.18.0/dist/tf.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
-<style id="warnStyle">.warn{background:#3b0d0d;color:#ffdada;padding:8px 12px;border:1px solid #5c1212;border-radius:8px;margin:8px 0}</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Image → Text (OCR) | Paste to Excel</title>
+  <meta name="description" content="Drop or select images, see thumbnails, run on-device OCR (Tesseract.js), and copy/download results for Excel/Sheets."/>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; background: #0f1115; color: #e5e7eb; margin: 0; }
+    .wrap { max-width: 1060px; margin: auto; padding: 16px; }
+    h1 { margin: 12px 0 8px; }
+    .row { display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+    .dropzone { border: 2px dashed #374151; border-radius: 14px; padding: 22px; text-align:center; margin-bottom: 16px; background:#0b1220; }
+    .dropzone.drag { border-color: #3b82f6; background: #0d1530; }
+    .btn { padding: 10px 14px; border-radius: 10px; border: 1px solid #374151; background:#1f2937; color:#fff; cursor: pointer; display:inline-block; }
+    .btn.primary { background:#3b82f6; border-color: transparent; }
+    .btn.success { background:#22c55e; border-color: transparent; }
+    select, textarea, input[type="text"] { background:#111827; color:#e5e7eb; border:1px solid #374151; border-radius:10px; padding:10px 12px; font:inherit; }
+    textarea { width:100%; min-height:220px; }
+    .grid { display:grid; grid-template-columns: 1fr 1fr; gap:16px; }
+    @media (max-width:900px){ .grid { grid-template-columns: 1fr; } }
+    .thumbs { display:grid; grid-template-columns: repeat(auto-fill, minmax(160px,1fr)); gap:10px; }
+    .thumb { background:#0b1220; border:1px solid #1f2937; border-radius:12px; overflow:hidden; }
+    .thumb img { display:block; width:100%; height:140px; object-fit:cover; background:#000; }
+    .thumb .meta { display:flex; justify-content:space-between; padding:6px 8px; font-size:12px; color:#9ca3af; }
+    .progress { height:10px; border-radius:999px; overflow:hidden; background:#111827; border:1px solid #1f2937; }
+    .progress > div { height:100%; width:0%; background: linear-gradient(90deg, #3b82f6, #22d3ee); transition: width .2s; }
+    .mono { font:12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space:pre-wrap; }
+    details summary { cursor:pointer; }
+    /* Make the input accessible but non-visible so label clicks work reliably */
+    .visually-hidden-input { position: fixed; left: -9999px; top: 0; width: 1px; height: 1px; opacity: 0; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js" crossorigin="anonymous"></script>
 </head>
 <body>
-<div id="httpsWarn" class="warn" style="display:none">This page is not in a secure context. Camera may fail on <code>http://</code> or <code>file://</code>. Use <b>HTTPS</b> or <b>localhost</b>.</div>
+  <div class="wrap">
+    <h1>Image → Text (OCR)</h1>
+    <div class="dropzone" id="drop">
+      <input type="file" id="fileInput" accept="image/*" multiple class="visually-hidden-input">
+      <p>📸 <strong>Drag & drop</strong> images here or <label for="fileInput" class="btn primary" id="chooseLabel">Choose Images</label></p>
+      <div class="progress" aria-label="overall"><div id="overallBar"></div></div>
+      <p id="status" class="mono" style="color:#9ca3af; margin:8px 0 0">No files yet.</p>
+    </div>
 
-<h2>Emotion-Only Ad Test
-  <span class="pill">frames: <span id="pFrames">0</span></span>
-  <span class="pill">faces: <span id="pFaces">0</span></span>
-</h2>
+    <div class="row" style="margin-bottom:12px">
+      <label for="lang">Language:</label>
+      <select id="lang">
+        <option value="eng" selected>English (eng)</option>
+        <option value="tam">Tamil (tam)</option>
+        <option value="eng+tam">English + Tamil</option>
+        <option value="msa">Malay (msa)</option>
+        <option value="hin">Hindi (hin)</option>
+      </select>
+      <button type="button" class="btn primary" id="runBtn">Run OCR</button>
+      <button type="button" class="btn" id="copyBtn">Copy All</button>
+      <button type="button" class="btn" id="csvBtn">Download CSV</button>
+      <button type="button" class="btn" id="tsvBtn">Download TSV</button>
+      <button type="button" class="btn success" id="selfTestBtn">Run Self‑Test</button>
+    </div>
 
-<div class="row">
-  <!-- LEFT: Capture + Controls -->
-  <div class="panel" style="flex:1 1 620px;">
-    <div class="grid2">
+    <div class="grid">
       <div>
-        <label>Model Path (folder with face-api models)</label>
-        <input id="modelPath" type="text" value="models" placeholder="e.g., models or /your-repo/models" />
+        <h3>Images</h3>
+        <div class="thumbs" id="thumbs"></div>
       </div>
       <div>
-        <label>Ad URL (MP4 — repo path OK)</label>
-        <input id="adUrl" type="text" value="ads/0813.mp4" />
+        <h3>Text Output</h3>
+        <textarea id="output" class="mono" placeholder="OCR output will appear here…"></textarea>
       </div>
     </div>
 
-    <div class="row" style="margin-top:10px;">
-      <div style="flex:1 1 420px;min-width:300px">
-        <video id="ad" controls playsinline></video>
-      </div>
-      <div class="camWrap" style="flex:1 1 260px;min-width:240px">
-        <video id="cam" autoplay muted playsinline></video>
-        <canvas id="overlay"></canvas>
-      </div>
-    </div>
-
-    <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap">
-      <button id="btnCam">Start webcam</button>
-      <button id="btnLoad" disabled>Load models</button>
-      $1
-      <button id="btnAnalyzeOnly" disabled>Analyze webcam only</button>
-      <button id="btnAnalyzeOnly" disabled>Analyze webcam only</button>
-      <button id="btnCSV" disabled>Download CSV</button>
-      <button id="btnJSON" disabled>Download JSON</button>
-      <button id="btnReport" disabled>Generate Report</button>
-      <span id="status" style="align-self:center;color:#9aa3b2">Booting…</span>
-    </div>
-
-    <div class="kpi">
-      <div><div style="color:#9aa3b2">Purchase Intention</div><div id="pi">—</div></div>
-      <div><div style="color:#9aa3b2">Brand Perception</div><div id="bp">—</div></div>
-      <div><div style="color:#9aa3b2">Awareness</div><div id="awr">—</div></div>
-    </div>
-
-    <div id="diag">DIAG:\n</div>
+    <details style="margin-top:16px">
+      <summary>Diagnostics & Tips</summary>
+      <div id="diag" class="mono"></div>
+      <ul>
+        <li>Everything runs in your browser via <code>Tesseract.js</code>. Images are not uploaded.</li>
+        <li>If thumbnails don’t appear, your files may not be images or are HEIC/HEIF (convert to PNG/JPG).</li>
+        <li>If you see “Script error.”, the worker likely failed to load. This build pins worker/core/lang paths.</li>
+      </ul>
+    </details>
   </div>
 
-  <!-- RIGHT: Branded Report Config -->
-  <div class="panel" style="flex:1 1 380px;">
-    <b>Report Config (Optional)</b>
-    <p style="color:#9aa3b2;margin:6px 0 10px">Set time ranges for brand moments and (optionally) image URLs to display in the report.</p>
+  <script>
+  'use strict';
+  // ===== Polyfills =====
+  if (typeof String.prototype.replaceAll !== 'function') {
+    String.prototype.replaceAll = function(find, replace){
+      return this.split(find).join(replace);
+    };
+  }
 
-    <label>Brand Logo time (mm:ss-mm:ss)</label>
-    <input id="logoRange" type="text" placeholder="00:02-00:04" />
-    <label>Brand Logo image URL (optional)</label>
-    <input id="logoImg" type="url" placeholder="/assets/logo.png" />
-
-    <label>CTA time (mm:ss-mm:ss)</label>
-    <input id="ctaRange" type="text" placeholder="00:12-00:15" />
-    <label>CTA image URL (optional)</label>
-    <input id="ctaImg" type="url" placeholder="/assets/cta.png" />
-
-    <label>Packshot time (mm:ss-mm:ss)</label>
-    <input id="packRange" type="text" placeholder="00:18-00:22" />
-    <label>Packshot image URL (optional)</label>
-    <input id="packImg" type="url" placeholder="/assets/packshot.png" />
-
-    <hr style="border:0;border-top:1px solid #23283a;margin:12px 0" />
-    <b>Tips</b>
-    <ul style="color:#9aa3b2">
-      <li>Click <b>Start webcam</b> — allow camera in the browser prompt (lock icon → Allow).</li>
-      <li>Click <b>Load models</b> — ensure three Probe lines and “MODELS: OK”.</li>
-      <li>Click <b>Play & analyze</b> — ad plays, detections draw; DIAG shows emotions.</li>
-      <li>If no face is detected for 3s, DIAG prints suggestions (lighting, distance, model path).</li>
-    </ul>
-  </div>
-</div>
-
-<script>
-  // ===== Settings =====
-  const SAMPLE_MS = 200; // ~5 Hz
-  const FACE_HINT_TIMEOUT_MS = 3500;
-  const FACE_HINT_TIMEOUT_MS = 3500; // time with no face before hint
-
-  // ===== DOM =====
-  const $ = id => document.getElementById(id);
-  const ad = $('ad'), cam = $('cam'), canv = $('overlay'), ctx = canv.getContext('2d');
-  const statusEl = $('status'), diagEl = $('diag');
-  const piEl=$('pi'), bpEl=$('bp'), awrEl=$('awr');
-  const pFramesEl=$('pFrames'), pFacesEl=$('pFaces');
+  // ===== Element refs =====
+  const drop = document.getElementById('drop');
+  const fileInput = document.getElementById('fileInput');
+  const runBtn = document.getElementById('runBtn');
+  const copyBtn = document.getElementById('copyBtn');
+  const csvBtn = document.getElementById('csvBtn');
+  const tsvBtn = document.getElementById('tsvBtn');
+  const selfTestBtn = document.getElementById('selfTestBtn');
+  const thumbs = document.getElementById('thumbs');
+  const output = document.getElementById('output');
+  const statusEl = document.getElementById('status');
+  const overallBar = document.getElementById('overallBar');
+  const langSel = document.getElementById('lang');
+  const diag = document.getElementById('diag');
 
   // ===== State =====
-  let MODEL_URL = '';
-  let modelsReady=false, webcamReady=false;
-  let timer=null;
-  const frames=[]; // per-sample rows
-  let faceFrames=0;
-  let lastFaceAt=0;
+  let files = [];
+  let results = []; // {name, text}
 
-  // ===== Utils & DIAG =====
-  const log = (...a)=> statusEl.textContent = a.join(' ');
-  const diag = (...a)=> { console.log('[diag]',...a); diagEl.textContent += a.join(' ') + '\n'; diagEl.scrollTop = diagEl.scrollHeight; };
-  const clamp=(x,a,b)=>Math.min(b,Math.max(a,x));
-  const nowMs = ()=> performance.now();
-
-  function updateReady(label=''){
-    const ready = (webcamReady===true) && (modelsReady===true);
-    $('btnPlay').disabled = !ready;
-    const ao = $('btnAnalyzeOnly'); if (ao) ao.disabled = !ready;
-    diag(`READY? ${ready} (webcamReady=${webcamReady} modelsReady=${modelsReady}) ${label}`);
-  } (webcamReady=${webcamReady} modelsReady=${modelsReady}) ${label}`);
-  } (webcamReady=${webcamReady} modelsReady=${modelsReady}) ${label}`);
-  }
-  window.addEventListener('error', e => { diag(`JS ERROR: ${e.message} @ ${e.filename}:${e.lineno}`); });
-  window.addEventListener('unhandledrejection', e => { diag(`Promise REJECTION: ${e.reason}`); });
-
-  function parseTime(t){
-    if(!t) return null;
-    if(/^\d+(\.\d+)?$/.test(t)) return parseFloat(t);
-    const m = t.match(/^(\d{1,2}):(\d{2})(?:\.(\d+))?$/);
-    if(!m) return null;
-    const mm=+m[1], ss=+m[2], frac=m[3]?parseFloat('0.'+m[3]):0; return mm*60+ss+frac;
-  }
-  function parseRange(r){
-    if(!r) return null; const m=r.split('-'); if(m.length!==2) return null; const s=parseTime(m[0].trim()), e=parseTime(m[1].trim()); if(isNaN(s)||isNaN(e)||e<=s) return null; return {start:s,end:e};
-  }
-
-  // ===== Webcam =====
-  async function startWebcam(){
-    try{
-      diag('Requesting webcam… (if nothing happens, click the lock icon → Allow camera)');
-      try { if(navigator.permissions?.query){ const p = await navigator.permissions.query({ name: 'camera' }); diag('Camera permission state:', p.state); p.onchange=()=>diag('Camera permission changed to:', p.state); } } catch {}
-      const warnTimer = setTimeout(()=>diag('Still waiting for camera… Tips: good lighting, face centered, allow camera access'), 5000);
-      const st = await navigator.mediaDevices.getUserMedia({
-        video:{ facingMode:'user', width:{ideal:1280}, height:{ideal:720} }, audio:false
-      });
-      clearTimeout(warnTimer);
-      cam.srcObject = st; await cam.play();
-      await new Promise(r => cam.onloadedmetadata = r);
-      // size overlay to actual video dimensions
-      const W = cam.videoWidth || 640, H = cam.videoHeight || 480; canv.width = W; canv.height = H;
-      webcamReady = true; window.webcamReady = true;
-      log(`Webcam ready ${canv.width}x${canv.height}`);
-      $('btnLoad').disabled = false; updateReady('[after webcam]');
-    }catch(e){ diag('webcam error:', e?.message || e); alert('Camera error: ' + (e?.message || e)); }
-  }
-
-  // ===== Models =====
-  async function loadModels(){
-    try{
-      MODEL_URL = ($('modelPath').value || 'models').replace(/\/$/,'');
-      const probe = async f => {
-        const url = `${MODEL_URL}/${f}?v=${Date.now()}`; diag('Probe:', url);
-        const r = await fetch(url, { cache:'no-store' }); if(!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
-      };
-      await probe('tiny_face_detector_model-weights_manifest.json');
-      await probe('face_landmark_68_model-weights_manifest.json');
-      await probe('face_expression_model-weights_manifest.json');
-
-      log('Loading models…');
-      if (typeof faceapi !== 'undefined' && faceapi.tf && faceapi.tf.setBackend){
-        try { await faceapi.tf.setBackend('webgl'); await faceapi.tf.ready(); diag('TFJS backend: webgl'); } catch(e){ diag('TFJS backend set failed:', e?.message||e); }
-      }
-      await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-      await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
-      await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
-      modelsReady = true; window.modelsReady = true; diag('MODELS: OK ✔ tinyFace + landmarks68 + expressions'); updateReady('[after models]');
-    }catch(e){ diag('Model load ERROR:', e?.message || e); log('Model load failed — check DIAG URLs & model path'); }
-  }/${f}?v=${Date.now()}`; diag('Probe:', url);
-        const r = await fetch(url, { cache:'no-store' }); if(!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
-      };
-      await probe('tiny_face_detector_model-weights_manifest.json');
-      await probe('face_landmark_68_model-weights_manifest.json');
-      await probe('face_expression_model-weights_manifest.json');
-
-      log('Loading models…');
-      await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-      await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
-      await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
-      modelsReady = true; window.modelsReady = true; diag('MODELS: OK ✔ tinyFace + landmarks68 + expressions'); updateReady('[after models]');
-    }catch(e){ diag('Model load ERROR:', e?.message || e); log('Model load failed — check DIAG URLs & model path'); }
-  }
-
-  // ===== Detection (aggressive + hints) =====
-  async function detectOnce(videoEl){
-    const tries = [
-      { inputSize: 512, scoreThreshold: 0.06 },
-      { inputSize: 448, scoreThreshold: 0.06 },
-      { inputSize: 384, scoreThreshold: 0.06 },
-      { inputSize: 320, scoreThreshold: 0.05 },
-      { inputSize: 256, scoreThreshold: 0.05 },
-      { inputSize: 224, scoreThreshold: 0.04 }
-    ];
-    for (const opt of tries){
-      const res = await faceapi
-        .detectAllFaces(videoEl, new faceapi.TinyFaceDetectorOptions(opt))
-        .withFaceLandmarks().withFaceExpressions();
-      if (res && res.length){
-        return res.reduce((b,c)=> c.detection.score > (b?.detection.score||0) ? c : b, null);
-      }
-    }
-    return null;
-  },
-      { inputSize: 320, scoreThreshold: 0.08 },
-      { inputSize: 256, scoreThreshold: 0.06 },
-      { inputSize: 224, scoreThreshold: 0.06 }
-    ];
-    for (const opt of tries){
-      const res = await faceapi
-        .detectAllFaces(videoEl, new faceapi.TinyFaceDetectorOptions(opt))
-        .withFaceLandmarks().withFaceExpressions();
-      if (res && res.length){
-        return res.reduce((b,c)=> c.detection.score > (b?.detection.score||0) ? c : b, null);
-      }
-    }
-    return null;
-  }
-
-  // ===== Sampling loop =====
-  async function tick(){
-    ctx.clearRect(0,0,canv.width,canv.height);
-    // draw cam underlay so user sees themselves even if no detections
-    if (cam.readyState >= 2) ctx.drawImage(cam, 0, 0, canv.width, canv.height);
-
-    let row = { t: ad.currentTime||0, happy:0,sad:0,angry:0,disgusted:0,fearful:0,surprised:0,neutral:0, face:0 };
-    if (modelsReady && cam.readyState >= 2){
-      const det = await detectOnce(cam);
-      if (det){
-        const r = faceapi.resizeResults(det, { width: canv.width, height: canv.height });
-        faceapi.draw.drawDetections(canv, r);
-        faceapi.draw.drawFaceLandmarks(canv, r);
-        const e = det.expressions || {};
-        row.happy=+(e.happy||0); row.sad=+(e.sad||0); row.angry=+(e.angry||0);
-        row.disgusted=+(e.disgusted||0); row.fearful=+(e.fearful||0);
-        row.surprised=+(e.surprised||0); row.neutral=+(e.neutral||0);
-        row.face=1; faceFrames++; pFacesEl.textContent=String(faceFrames); lastFaceAt = nowMs();
-      }
-    }
-    frames.push(row); pFramesEl.textContent=String(frames.length);
-
-    // Hints if no face for some time
-    const since = nowMs() - lastFaceAt;
-    if (since > FACE_HINT_TIMEOUT_MS){
-      diag('No face detected → tips: move closer, better lighting, center face; also verify Model Path points to the models folder.');
-    }
+  // Pin Tesseract resource paths to avoid cross-origin failures on GitHub Pages
+  const TESS_OPTS = {
+    workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/worker.min.js',
+    corePath:   'https://cdn.jsdelivr.net/npm/tesseract.js-core@4.0.2/tesseract-core.wasm.js',
+    langPath:   'https://tessdata.projectnaptha.com/4.0.0',
   };
-    if (modelsReady){
-      const det = await detectOnce(cam);
-      if (det){
-        const r = faceapi.resizeResults(det, { width: canv.width, height: canv.height });
-        faceapi.draw.drawDetections(canv, r);
-        faceapi.draw.drawFaceLandmarks(canv, r);
-        const e = det.expressions || {};
-        row.happy=+(e.happy||0); row.sad=+(e.sad||0); row.angry=+(e.angry||0);
-        row.disgusted=+(e.disgusted||0); row.fearful=+(e.fearful||0);
-        row.surprised=+(e.surprised||0); row.neutral=+(e.neutral||0);
-        row.face=1; faceFrames++; pFacesEl.textContent=String(faceFrames); lastFaceAt = nowMs();
-      }
-    }
-    frames.push(row); pFramesEl.textContent=String(frames.length);
 
-    // If no face for 3s, print guidance once per second
-    if (nowMs() - lastFaceAt > 3000){
-      if (Math.floor((nowMs()-lastFaceAt)/1000)%1===0) {
-        diag('No face detected recently → Tips: move closer, center face, add lighting, check model path (', $('modelPath').value, ')');
-      }
-    }
+  function setStatus(s){ statusEl.textContent = s; }
+  function pctStr(p){ return Math.max(0, Math.min(100, p)).toFixed(0) + '%'; }
+  function logDiag(lines){
+    const arr = [
+      'Tesseract loaded: ' + (!!window.Tesseract),
+      'workerPath: ' + TESS_OPTS.workerPath,
+      'corePath:   ' + TESS_OPTS.corePath,
+      'langPath:   ' + TESS_OPTS.langPath,
+      'Files: ' + files.length
+    ];
+    if (lines){ Array.isArray(lines) ? arr.push(...lines) : arr.push(String(lines)); }
+    diag.textContent = arr.join('
+');
   }
 
-  // ===== KPIs =====
-  function calcKPIs(){
-    const valid = frames.filter(f=>f.face);
-    const total = valid.length || 1;
-    const posFrames = valid.filter(f => (f.happy>0.30) || (f.surprised>0.30)).length;
-    const negFrames = valid.filter(f => (f.sad>0.30) || (f.angry>0.30) || (f.disgusted>0.30)).length;
-    const awareFrames = valid.filter(f => (f.happy>0.15)||(f.sad>0.15)||(f.angry>0.15)||(f.surprised>0.15)||(f.fearful>0.15)).length;
-    const PI  = clamp( (posFrames/total)*100, 0, 100 );
-    const BP  = clamp( ((posFrames - negFrames)/total)*100 + 50, 0, 100 );
-    const AWR = clamp( (awareFrames/total)*100, 0, 100 );
-    piEl.textContent  = PI.toFixed(1); bpEl.textContent  = BP.toFixed(1); awrEl.textContent = AWR.toFixed(1);
-    return { PI:+PI.toFixed(1), BP:+BP.toFixed(1), AWR:+AWR.toFixed(1) };
-  }
+  // ===== File picking =====
+  fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
 
-  // ===== Exports =====
-  function download(name, text, type='text/plain'){
-    const blob = new Blob([text], {type}); const a=document.createElement('a');
-    a.href=URL.createObjectURL(blob); a.download=name; a.click(); URL.revokeObjectURL(a.href);
-  }
-  function framesCSV(rows){
-    const header = ['t','happy','sad','angry','disgusted','fearful','surprised','neutral','face'];
-    const lines = [header.join(',')];
-    rows.forEach(r => lines.push([r.t,r.happy,r.sad,r.angry,r.disgusted,r.fearful,r.surprised,r.neutral,r.face].map(x=>typeof x==='number'?x.toFixed(4):x).join(',')));
-    return lines.join('\n');
-  }
+  // Drag & drop
+  ['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('drag'); }));
+  ['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('drag'); }));
+  drop.addEventListener('drop', (e) => handleFiles(e.dataTransfer.files));
 
-  // ===== Report builder =====
-  function fmtTs(s){ const mm = Math.floor(s/60); const ss = Math.floor(s%60); return `${mm.toString().padStart(2,'0')}:${ss.toString().padStart(2,'0')}`; }
-  function avg(arr){ return arr.length? arr.reduce((a,b)=>a+b,0)/arr.length : 0; }
-
-  function statsForRange(frames, range){
-    if(!range) return null; const sub = frames.filter(f=>f.face && f.t>=range.start && f.t<=range.end);
-    const ems=['happy','sad','angry','disgusted','fearful','surprised','neutral'];
-    const avgEmo=Object.fromEntries(ems.map(k=>[k, avg(sub.map(v=>+v[k]||0))]));
-    const total=sub.length||1;
-    const pos=sub.filter(f=>(f.happy>0.30)||(f.surprised>0.30)).length;
-    const neg=sub.filter(f=>(f.sad>0.30)||(f.angry>0.30)||(f.disgusted>0.30)).length;
-    const aware=sub.filter(f=>(f.happy>0.15)||(f.sad>0.15)||(f.angry>0.15)||(f.surprised>0.15)||(f.fearful>0.15)).length;
-    const PI=clamp((pos/total)*100,0,100), BP=clamp(((pos-neg)/total)*100+50,0,100), AWR=clamp((aware/total)*100,0,100);
-    return { count: sub.length, avgEmo, PI:+PI.toFixed(1), BP:+BP.toFixed(1), AWR:+AWR.toFixed(1) };
-  }
-
-  function buildStats(frames){
-    const valid = frames.filter(f=>f.face);
-    const ems=['happy','sad','angry','disgusted','fearful','surprised','neutral'];
-    const avgEmo=Object.fromEntries(ems.map(k=>[k, avg(valid.map(v=>+v[k]||0))]));
-    const scored=valid.map(v=>({ t:v.t, pos:(v.happy||0)+0.6*(v.surprised||0), neg:(v.sad||0)+(v.angry||0)+0.8*(v.disgusted||0) }));
-    const topPos=[...scored].sort((a,b)=>b.pos-a.pos).slice(0,5);
-    const topNeg=[...scored].sort((a,b)=>b.neg-a.neg).slice(0,5);
-    const segs=[]; let cur=null;
-    valid.forEach(v=>{ const engaged=(v.happy>0.15)||(v.sad>0.15)||(v.angry>0.15)||(v.surprised>0.15)||(v.fearful>0.15);
-      if(engaged && !cur){ cur={start:v.t,end:v.t,peakPos:0}; }
-      if(engaged && cur){ cur.end=v.t; const ps=(v.happy||0)+0.6*(v.surprised||0); if(ps>cur.peakPos) cur.peakPos=ps; }
-      if(!engaged && cur){ segs.push(cur); cur=null; }
+  // ===== Thumbnails =====
+  function renderThumbs(){
+    thumbs.innerHTML = '';
+    files.forEach(f => {
+      const url = URL.createObjectURL(f);
+      const div = document.createElement('div');
+      div.className = 'thumb';
+      div.innerHTML = '<img alt="'+f.name+'" src="'+url+'"><div class="meta"><span>'+f.name+'</span><span>'+ (f.size/1024).toFixed(1) +' KB</span></div>';
+      thumbs.appendChild(div);
+      setTimeout(()=> URL.revokeObjectURL(url), 15000);
     });
-    if(cur) segs.push(cur);
-    const topSegs = segs.map(s=>({start:s.start,end:s.end,dur:Math.max(0,(s.end-s.start)),peakPos:s.peakPos}))
-                        .sort((a,b)=>b.dur-a.dur).slice(0,5);
-    return { validCount:valid.length, totalCount:frames.length, avgEmo, topPos, topNeg, topSegs };
   }
 
-  function cardKV(title, valueHtml){ return `<div class="card"><div class="muted">${title}</div><div style="font-size:28px">${valueHtml}</div></div>`; }
-
-  function buildReportHTML(meta, kpi, frames, segments){
-    const stats = buildStats(frames);
-    const facePct = ((stats.validCount/Math.max(1,stats.totalCount))*100).toFixed(1);
-    const ts = new Date(meta.ts||Date.now()).toLocaleString();
-
-    function liPeak(p){ return `<li><b>${fmtTs(p.t)}</b> — score: ${(p.pos??p.neg).toFixed(2)}</li>`; }
-    function liSeg(s){ return `<li><b>${fmtTs(s.start)}</b> → <b>${fmtTs(s.end)}</b> (${s.dur.toFixed(1)}s), peak positive ${s.peakPos.toFixed(2)}</li>`; }
-    function emoGrid(avg){
-      return `<div class="kpis">${Object.entries(avg).map(([k,v])=>`<div class="card"><div class="muted">${k}</div><div style="font-size:22px">${(+v).toFixed(3)}</div></div>`).join('')}</div>`;
-    }
-
-    const logo = segments.logo?.range ? statsForRange(frames, segments.logo.range) : null;
-    const cta  = segments.cta?.range  ? statsForRange(frames, segments.cta.range)  : null;
-    const pack = segments.pack?.range ? statsForRange(frames, segments.pack.range) : null;
-
-    const html = `<!doctype html>
-<html>
-<head>
-<meta charset="utf-8" />
-<title>Emotion Ad Report</title>
-<style>
-  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;padding:24px;background:#0f1115;color:#e5e7eb}
-  h1,h2{color:#fff}
-  .kpis{display:flex;gap:12px;flex-wrap:wrap}
-  .card{background:#121826;border:1px solid #1f2937;border-radius:12px;padding:12px;flex:1 1 220px}
-  .muted{color:#9aa3b2}
-  ul{margin:8px 0 0 18px}
-  code{background:#0b1020;padding:2px 6px;border-radius:6px}
-  details{margin-top:12px}
-  img.asset{max-width:320px;border-radius:10px;border:1px solid #1f2937;background:#0b1020}
-  .row{display:flex;flex-wrap:wrap;gap:12px}
-</style>
-</head>
-<body>
-  <h1>Emotion-Only Ad Report</h1>
-  <div class="muted">Generated: ${ts}</div>
-  <p class="muted">Ad: <code>${meta.ad||''}</code></p>
-
-  <div class="kpis">
-    ${cardKV('Purchase Intention', kpi.PI)}
-    ${cardKV('Brand Perception', kpi.BP)}
-    ${cardKV('Awareness', kpi.AWR)}
-    ${cardKV('Face-tracked frames', `${stats.validCount} / ${stats.totalCount} (${facePct}%)`)}
-  </div>
-
-  <h2>Emotion Averages (Whole Ad)</h2>
-  ${emoGrid(stats.avgEmo)}
-
-  <h2>Highlights</h2>
-  <div class="kpis">
-    <div class="card"><b>Top Positive Moments</b><ul>${stats.topPos.map(liPeak).join('')}</ul></div>
-    <div class="card"><b>Top Negative Moments</b><ul>${stats.topNeg.map(liPeak).join('')}</ul></div>
-    <div class="card"><b>Longest Engaged Segments</b><ul>${stats.topSegs.map(liSeg).join('')}</ul></div>
-  </div>
-
-  ${(logo||cta||pack)?`<h2>Branded Moments</h2>`:''}
-  ${logo?`
-  <div class="card">
-    <b>Brand Logo</b> <span class="muted">${fmtTs(segments.logo.range.start)}–${fmtTs(segments.logo.range.end)}</span>
-    ${segments.logo.img?`<div class="row"><img class="asset" src="${segments.logo.img}" alt="Brand logo"/></div>`:''}
-    <div class="kpis">${cardKV('PI', logo.PI)}${cardKV('BP', logo.BP)}${cardKV('AWR', logo.AWR)}${cardKV('Frames', logo.count)}</div>
-    ${emoGrid(logo.avgEmo)}
-  </div>`:''}
-
-  ${cta?`
-  <div class="card" style="margin-top:12px">
-    <b>CTA</b> <span class="muted">${fmtTs(segments.cta.range.start)}–${fmtTs(segments.cta.range.end)}</span>
-    ${segments.cta.img?`<div class="row"><img class="asset" src="${segments.cta.img}" alt="CTA"/></div>`:''}
-    <div class="kpis">${cardKV('PI', cta.PI)}${cardKV('BP', cta.BP)}${cardKV('AWR', cta.AWR)}${cardKV('Frames', cta.count)}</div>
-    ${emoGrid(cta.avgEmo)}
-  </div>`:''}
-
-  ${pack?`
-  <div class="card" style="margin-top:12px">
-    <b>Packshot</b> <span class="muted">${fmtTs(segments.pack.range.start)}–${fmtTs(segments.pack.range.end)}</span>
-    ${segments.pack.img?`<div class="row"><img class="asset" src="${segments.pack.img}" alt="Packshot"/></div>`:''}
-    <div class="kpis">${cardKV('PI', pack.PI)}${cardKV('BP', pack.BP)}${cardKV('AWR', pack.AWR)}${cardKV('Frames', pack.count)}</div>
-    ${emoGrid(pack.avgEmo)}
-  </div>`:''}
-
-  <details>
-    <summary>Raw frames JSON</summary>
-    <pre>${JSON.stringify(frames,null,2)}</pre>
-  </details>
-</body>
-</html>`;
-    return html;
+  function handleFiles(list){
+    const arr = Array.from(list || []);
+    const images = arr.filter(f => f && f.type && f.type.startsWith('image/'));
+    const heic = arr.filter(f => f && (/(heic|heif)/i.test(f.type) || /\.heic$/i.test(f.name)));
+    if (heic.length) alert('HEIC/HEIF may not be supported by your browser. Please convert to PNG/JPG.');
+    files = images;
+    results = [];
+    renderThumbs();
+    setStatus(files.length ? files.length + ' image(s) selected.' : 'No files yet.');
+    overallBar.style.width = '0%';
+    output.value = '';
+    logDiag();
   }
 
-  // ===== UI events =====
-  $('btnCam').addEventListener('click', startWebcam);
-  $('btnLoad').addEventListener('click', loadModels);
+  function csvQuote(s){
+    const v = String(s ?? '');
+    return '"' + v.replace(/"/g,'""') + '"';
+  }
 
-  $('btnPlay').addEventListener('click', async () => {
-    frames.length = 0; faceFrames = 0; pFacesEl.textContent='0'; pFramesEl.textContent='0'; lastFaceAt = nowMs();
-    ad.src = ($('adUrl').value || '').trim() || 'ads/0813.mp4';
-    try { await ad.play(); }
-    catch (e) { diag('Autoplay blocked, retrying muted…'); ad.muted = true; try { await ad.play(); } catch { log('Click the video to start, then click Play & analyze again.'); return; } }
-    if (!timer) { timer = setInterval(tick, SAMPLE_MS); }
-    log('Analyzing…');
-  });
+  function download(type, filename){
+    if(!results.length){ setStatus('No results to download.'); return; }
+    const header = 'filename,extracted_text
+';
+    const bodyCSV = results.map(r => csvQuote(r.name)+','+csvQuote(r.text.replace(/
+/g,' '))).join('
+');
+    const bodyTSV = results.map(r => r.name+'	'+r.text.replace(/
+/g,' ')).join('
+');
+    const body = (type === 'text/tab-separated-values') ? bodyTSV : (header + bodyCSV);
+    const blob = new Blob([body], { type });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
+    setTimeout(()=> URL.revokeObjectURL(url), 4000);
+  }
 
-  // Analyze webcam without playing ad
-  $('btnAnalyzeOnly').addEventListener('click', async () => {
-    frames.length = 0; faceFrames = 0; pFacesEl.textContent='0'; pFramesEl.textContent='0'; lastFaceAt = nowMs();
-    if (!timer) { timer = setInterval(tick, SAMPLE_MS); }
-    log('Analyzing webcam…');
-  });
-    ad.src = ($('adUrl').value || '').trim() || 'ads/0813.mp4';
-    try { await ad.play(); }
-    catch (e) { diag('Autoplay blocked, retrying muted…'); ad.muted = true; try { await ad.play(); } catch { log('Click the video to start, then click Play & analyze again.'); return; } }
-    if (!timer) { timer = setInterval(tick, SAMPLE_MS); }
-    log('Analyzing…');
-  });
+  async function imageToPngBlob(file){
+    try{
+      const bmp = await createImageBitmap(file);
+      const c = document.createElement('canvas');
+      c.width = bmp.width; c.height = bmp.height;
+      const ctx = c.getContext('2d');
+      ctx.drawImage(bmp,0,0);
+      const blob = await new Promise(res => c.toBlob(res, 'image/png'));
+      bmp.close();
+      return blob || file;
+    }catch{ return file; }
+  }
 
-  // Allow analyzing without an ad (pure webcam test)
-  $('btnAnalyzeOnly').addEventListener('click', () => {
-    frames.length = 0; faceFrames = 0; pFacesEl.textContent='0'; pFramesEl.textContent='0'; lastFaceAt = nowMs();
-    if (!timer) { timer = setInterval(tick, SAMPLE_MS); }
-    log('Analyzing webcam…');
-  });
-    ad.src = ($('adUrl').value || '').trim() || 'ads/0813.mp4';
+  async function recognizeOne(file, langs){
+    const png = await imageToPngBlob(file);
 
-    try { await ad.play(); }
-    catch (e) {
-      diag('Autoplay blocked, retrying muted…'); ad.muted = true; try { await ad.play(); } catch { log('Click the video to start, then click Play & analyze again.'); return; }
+    // Scale small images up to help OCR
+    const scaled = await (async () => {
+      try{
+        const bmp = await createImageBitmap(png);
+        let w = bmp.width, h = bmp.height;
+        const MIN = 900;
+        if (Math.max(w,h) < MIN){
+          const s = MIN/Math.max(w,h);
+          const c = document.createElement('canvas'); c.width = Math.round(w*s); c.height = Math.round(h*s);
+          const ctx = c.getContext('2d');
+          ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(bmp, 0, 0, c.width, c.height);
+          const b2 = await new Promise(res => c.toBlob(res, 'image/png'));
+          bmp.close();
+          return b2 || png;
+        }
+        bmp.close();
+        return png;
+      }catch{ return png; }
+    })();
+
+    try{
+      const res = await Tesseract.recognize(scaled, (langs||'eng').toLowerCase(), {
+        ...TESS_OPTS,
+        logger: m => {
+          if(m.status === 'recognizing text' && typeof m.progress === 'number'){
+            overallBar.style.width = pctStr(m.progress*100);
+            setStatus('OCR ' + pctStr(m.progress*100));
+          }
+        },
+        params: {
+          tessedit_pageseg_mode: '6',
+          preserve_interword_spaces: '1',
+          user_defined_dpi: '300'
+        }
+      });
+      const conf = (res && res.data && (res.data.confidence ?? res.data.conf) || 0) * 1;
+      const text = (res && res.data && res.data.text || '').trim();
+      logDiag(['Langs: '+(langs||'eng'), 'Confidence≈ '+Math.round(conf), 'Chars: '+text.length]);
+      return { text, conf };
+    }catch(err){
+      logDiag(['Error recognize('+(langs||'eng')+'): ' + (err && err.message || err)]);
+      return { text:'', conf:0 };
     }
+  }
 
-    if (timer) clearInterval(timer);
-    timer = setInterval(tick, SAMPLE_MS); log('Analyzing…');
-  });
+  async function runOCR(){
+    if(!files.length){ alert('Please select or drop images first.'); return; }
+    if(!window.Tesseract){ setStatus('Tesseract failed to load'); return; }
 
-  ad.addEventListener('ended', () => {
-    if (timer) { clearInterval(timer); timer=null; }
-    const k = calcKPIs();
-    log(`Done. PI=${k.PI} BP=${k.BP} AWR=${k.AWR}`);
-    $('btnCSV').disabled = false; $('btnJSON').disabled = false; $('btnReport').disabled = false;
-  });
+    results = [];
+    output.value = '';
+    const langs = langSel.value; // allow combos like eng+tam
+    setStatus('Running OCR ('+langs+')…');
 
-  // If the user plays the ad using native controls, auto-start analysis
-  ad.addEventListener('play', () => {
-    if (!timer && modelsReady && webcamReady){
-      lastFaceAt = nowMs();
-      timer = setInterval(tick, SAMPLE_MS);
-      diag('Ad playing detected → auto-started analysis.');
+    for (let i=0; i<files.length; i++){
+      overallBar.style.width = pctStr((i/files.length)*100);
+      const best = await recognizeOne(files[i], langs);
+      results.push({ name: files[i].name, text: best.text });
     }
-  });
+    overallBar.style.width = '100%';
 
-  $('btnCSV').addEventListener('click', () => download(`frames_${Date.now()}.csv`, framesCSV(frames), 'text/csv'));
-  $('btnJSON').addEventListener('click', () => {
-    const k = calcKPIs(); const report = { meta:{ ts:Date.now(), ad:$('adUrl').value }, kpi:k, frames };
-    download(`report_${Date.now()}.json`, JSON.stringify(report, null, 2), 'application/json');
-  });
+    // Emit output (filename, text) per line for easy paste to Excel/Sheets
+    output.value = results.map(r => r.name + ', ' + r.text.replace(/
+/g,' ')).join('
+');
+    setStatus('Done.');
+  }
 
-  $('btnReport').addEventListener('click', () => {
-    const k = calcKPIs(); const meta = { ts: Date.now(), ad: $('adUrl').value };
-    const segments = {
-      logo: { range: parseRange(($('logoRange').value||'').trim()), img: ($('logoImg').value||'').trim() },
-      cta:  { range: parseRange(($('ctaRange').value||'').trim()),  img: ($('ctaImg').value||'').trim() },
-      pack: { range: parseRange(($('packRange').value||'').trim()), img: ($('packImg').value||'').trim() }
-    };
-    const html = buildReportHTML(meta, k, frames, segments);
-    download(`emotion_report_${Date.now()}.html`, html, 'text/html');
-  });
+  function copyAll(){
+    if(!output.value){ setStatus('Nothing to copy.'); return; }
+    navigator.clipboard.writeText(output.value).then(()=> setStatus('Copied!')).catch(()=>{
+      output.select(); document.execCommand('copy'); setStatus('Copied (fallback).');
+    });
+  }
 
-  // ===== Boot =====
-  (async () => {
-    diagEl.textContent = 'DIAG:\nPage loaded. Booting…\n';
-    const secureOK = (location.protocol==='https:' || location.hostname==='localhost');
-    if(!secureOK){ $('httpsWarn').style.display='block'; }
-    $('modelPath').addEventListener('change', ()=>{ modelsReady=false; $('btnLoad').disabled=false; });
-  })();
-</script>
+  async function renderTextToBlob(text){
+    const canvas = document.createElement('canvas');
+    const pad = 30;
+    const lines = String(text).split(/
+/);
+    const ctx = canvas.getContext('2d');
+    ctx.font = 'bold 42px Arial, Helvetica, sans-serif';
+    const width = Math.max(...lines.map(l=>ctx.measureText(l).width)) + pad*2;
+    const height = lines.length * 60 + pad*2;
+    canvas.width = Math.ceil(width);
+    canvas.height = Math.ceil(height);
+    ctx.fillStyle = '#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle = '#000'; ctx.textBaseline = 'top';
+    ctx.font = 'bold 42px Arial, Helvetica, sans-serif';
+    lines.forEach((l, i)=> ctx.fillText(l, pad, pad + i*60));
+    return new Promise(res => canvas.toBlob(res, 'image/png'));
+  }
+
+  async function runSelfTest(){
+    const tests = [
+      { name:'test_eng_hello.png', text:'HELLO 123
+Invoice #456
+TOTAL 789.00' },
+      { name:'test_eng_blocky.png', text:'THIS IS A TEST
+BLOCK TEXT OCR' },
+      { name:'test_tam_sample.png', text:'தமிழ் மாதிரி
+சோதனை' }
+    ];
+
+    files = [];
+    thumbs.innerHTML = '';
+    results = [];
+    output.value = '';
+    setStatus('Generating test images…');
+
+    for (const t of tests){
+      const blob = await renderTextToBlob(t.text);
+      const file = new File([blob], t.name, { type: 'image/png' });
+      files.push(file);
+    }
+    renderThumbs();
+    setStatus('Running self‑test…');
+
+    for (let i=0; i<files.length; i++){
+      const L = /tam/.test(files[i].name) ? 'tam' : 'eng';
+      const best = await recognizeOne(files[i], L);
+      results.push({ name: files[i].name, text: best.text });
+    }
+    output.value = results.map(r => r.name + ', ' + r.text.replace(/
+/g,' ')).join('
+');
+
+    logDiag(['', 'Self‑test expected vs. got (first 60 chars):',
+      ...results.map((r,i)=>{
+        const exp = tests[i].text.replace(/
+/g,' ').slice(0,60);
+        const got = r.text.replace(/
+/g,' ').slice(0,60);
+        return '• '+tests[i].name+'
+   expected≈ '+exp+'
+   got     ≈ '+got;
+      })
+    ]);
+    setStatus('Self‑test complete.');
+    overallBar.style.width = '100%';
+  }
+
+  // ===== Wire up buttons =====
+  runBtn.addEventListener('click', runOCR);
+  copyBtn.addEventListener('click', copyAll);
+  csvBtn.addEventListener('click', () => download('text/csv', 'ocr_results.csv'));
+  tsvBtn.addEventListener('click', () => download('text/tab-separated-values', 'ocr_results.tsv'));
+  selfTestBtn.addEventListener('click', runSelfTest);
+
+  // Initial diag
+  logDiag();
+  </script>
 </body>
 </html>
