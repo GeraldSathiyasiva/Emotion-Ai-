@@ -1,121 +1,318 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Camera Sanity Check</title>
+<title>Emotion Ad — GitHub Models + 5s Test + Report</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <style>
+  :root { color-scheme: dark; }
   body{background:#0f1115;color:#e5e7eb;font-family:system-ui,Arial;margin:16px}
-  video{width:640px;max-width:100%;border:1px solid #2a2f3d;border-radius:10px;background:#000}
-  #diag{white-space:pre-wrap;font:12px ui-monospace;background:#0b1020;border:1px solid #222;border-radius:10px;padding:10px;height:260px;overflow:auto;margin-top:10px}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start}
+  .panel{flex:1 1 560px;border:1px solid #222;border-radius:10px;padding:12px;background:#131722}
+  video,canvas{width:100%;border-radius:10px;background:#000}
   button{padding:10px 14px;border:0;border-radius:10px;background:#2a2f3d;color:#fff;cursor:pointer}
+  button:disabled{opacity:.55;cursor:not-allowed}
+  input[type="text"]{width:100%;padding:8px 10px;border-radius:8px;border:1px solid #333;background:#161a26;color:#fff}
+  #diag{white-space:pre-wrap;font:12px ui-monospace;max-height:280px;overflow:auto;background:#0b1020;border:1px solid #222;border-radius:8px;padding:10px;margin-top:10px}
+  .kpi{display:flex;gap:10px;margin-top:10px}
+  .kpi>div{flex:1 1 0;background:#101520;border:1px solid #222;border-radius:10px;padding:10px;text-align:center}
+  .pill{display:inline-block;padding:2px 8px;background:#1f2433;border-radius:8px;margin-left:8px}
 </style>
+<script>
+  // Early logger (works even if external scripts fail)
+  (function(){
+    const Q=[]; window.__diagReady=false; window.__diagQ=Q;
+    window.diag=function(){ const s=[...arguments].join(' '); console.log('[diag]',s);
+      if(!window.__diagReady){Q.push(s);return;}
+      const el=document.getElementById('diag'); if(el){el.textContent+=s+'\n'; el.scrollTop=el.scrollHeight;}
+    };
+    window.addEventListener('error', e=>diag(`JS ERROR: ${e.message} @ ${e.filename}:${e.lineno}`));
+    window.addEventListener('unhandledrejection', e=>diag(`Promise REJECTION: ${e.reason?.message||e.reason}`));
+    diag('BOOT: inline logger alive');
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.18.0/dist/tf.min.js"
+        onload="diag('CDN: tfjs loaded')" onerror="diag('CDN: tfjs **FAILED** to load')"></script>
+<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"
+        onload="diag('CDN: face-api loaded')" onerror="diag('CDN: face-api **FAILED** to load')"></script>
 </head>
 <body>
-<h2>Camera Sanity Check</h2>
-<p>Click the button. If nothing appears, check the DIAG logs below — they’ll tell you exactly why.</p>
-<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-  <button id="btn">Start camera</button>
-  <label><input id="rear" type="checkbox"> Use rear camera</label>
+<h2>Emotion-Only Ad Test
+  <span class="pill">frames: <span id="pFrames">0</span></span>
+  <span class="pill">faces: <span id="pFaces">0</span></span>
+</h2>
+
+<div class="row">
+  <div class="panel" style="flex:1 1 640px;">
+    <label>Ad URL (MP4)</label>
+    <input id="adUrl" type="text" value="ads/0813.mp4" />
+
+    <div class="row" style="margin-top:10px">
+      <div style="flex:1 1 420px;min-width:300px">
+        <video id="ad" controls playsinline></video>
+      </div>
+      <div style="flex:1 1 260px;min-width:240px">
+        <video id="cam" autoplay muted playsinline></video>
+        <canvas id="overlay"></canvas>
+      </div>
+    </div>
+
+    <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <button id="btnStart">Start camera + Load models + 5s test</button>
+      <button id="btnPlay" disabled>Play & analyze</button>
+      <button id="btnCSV" disabled>Download CSV</button>
+      <button id="btnJSON" disabled>Download JSON</button>
+      <button id="btnReport" disabled>Generate Report</button>
+      <label><input id="rear" type="checkbox"> Rear cam</label>
+      <label><input id="mirror" type="checkbox" checked> Mirror draw</label>
+      <span id="status" style="color:#9aa3b2">Booting…</span>
+    </div>
+
+    <div class="kpi">
+      <div><div style="color:#9aa3b2">Purchase Intention</div><div id="pi">—</div></div>
+      <div><div style="color:#9aa3b2">Brand Perception</div><div id="bp">—</div></div>
+      <div><div style="color:#9aa3b2">Awareness</div><div id="awr">—</div></div>
+    </div>
+
+    <div id="diag">DIAG:\n</div>
+  </div>
+
+  <div class="panel" style="flex:1 1 320px;">
+    <b>Branded Moments (optional)</b>
+    <label>Logo (mm:ss-mm:ss)</label><input id="logoRange" type="text" placeholder="00:02-00:04" />
+    <label>CTA (mm:ss-mm:ss)</label><input id="ctaRange" type="text" placeholder="00:04-00:06" />
+    <label>Packshot (mm:ss-mm:ss)</label><input id="packRange" type="text" placeholder="00:06-00:07" />
+  </div>
 </div>
-<video id="cam" autoplay playsinline muted></video>
-<div id="diag">DIAG:\n</div>
 
 <script>
-const cam = document.getElementById('cam');
-const diagEl = document.getElementById('diag');
-const log = (...a)=>{ console.log('[diag]',...a); diagEl.textContent += a.join(' ') + '\n'; diagEl.scrollTop = diagEl.scrollHeight; };
+/* ===== Make DIAG live ===== */
+window.__diagReady=true; if(Array.isArray(window.__diagQ)){window.__diagQ.forEach(s=>diag(s)); window.__diagQ.length=0;}
 
-window.addEventListener('error', e => log(`JS ERROR: ${e.message} @ ${e.filename}:${e.lineno}`));
-window.addEventListener('unhandledrejection', e => log(`Promise REJECTION: ${e.reason?.message||e.reason}`));
+/* ===== Constants ===== */
+const GH_PAGES_BASE='https://geraldsathiyasiva.github.io/Emotion-Ai-/models';
+const GH_RAW_BASE  ='https://raw.githubusercontent.com/GeraldSathiyasiva/Emotion-Ai-/main/models';
+const SAMPLE_MS=250, TEST_MS=5000;
 
-(async ()=>{
-  log('ENV secure/localhost:', (location.protocol==='https:' || location.hostname==='localhost'));
-  log('Navigator:', navigator.userAgent);
-  // Permission probe (best-effort; not supported everywhere)
-  try{
-    if (navigator.permissions?.query){
-      const perm = await navigator.permissions.query({ name: 'camera' });
-      log('Permission (camera):', perm.state);
-      perm.onchange = () => log('Permission changed →', perm.state);
-    }else{
-      log('Permissions API not available');
+/* ===== DOM / State ===== */
+const $=id=>document.getElementById(id);
+const ad=$('ad'), cam=$('cam'), canv=$('overlay'), ctx=canv.getContext('2d',{willReadFrequently:true});
+const statusEl=$('status'), pFramesEl=$('pFrames'), pFacesEl=$('pFaces');
+const piEl=$('pi'), bpEl=$('bp'), awrEl=$('awr');
+let MODEL_URL=null, stream=null, timer=null;
+let frames=[], faceFrames=0, testPassed=false;
+const log=(...a)=>statusEl.textContent=a.join(' ');
+
+/* ===== Utils ===== */
+const clamp=(x,a,b)=>Math.min(b,Math.max(a,x));
+function luminance(){
+  const x=Math.max(0,Math.floor(canv.width/2)-32), y=Math.max(0,Math.floor(canv.height/2)-32);
+  const w=Math.min(64,canv.width-x), h=Math.min(64,canv.height-y);
+  if(w<=0||h<=0) return 0;
+  const d=ctx.getImageData(x,y,w,h).data; let s=0,n=0;
+  for(let i=0;i<d.length;i+=4){ s+=0.2126*d[i]+0.7152*d[i+1]+0.0722*d[i+2]; n++; }
+  return n? s/n : 0;
+}
+async function probe(base){
+  const u=`${base}/tiny_face_detector_model-weights_manifest.json?cb=${Date.now()}`;
+  try{ const r=await fetch(u,{cache:'no-store'}); diag('PROBE',u,'→',r.status); return r.ok; }
+  catch(e){ diag('PROBE ERR', e.message); return false; }
+}
+async function pickModelBase(){ return (await probe(GH_PAGES_BASE))?GH_PAGES_BASE:((await probe(GH_RAW_BASE))?GH_RAW_BASE:null); }
+
+async function startWebcam(useRear){
+  if(stream){ try{ stream.getTracks().forEach(t=>t.stop()); }catch{} stream=null; }
+  const st=await navigator.mediaDevices.getUserMedia({ video:{ facingMode: useRear?'environment':'user', width:{ideal:1280}, height:{ideal:720} }, audio:false });
+  stream=st; cam.srcObject=st; await cam.play(); await new Promise(r=>cam.onloadedmetadata=r);
+  canv.width=cam.videoWidth||640; canv.height=cam.videoHeight||480;
+  diag('Webcam OK @', cam.videoWidth, 'x', cam.videoHeight);
+}
+
+async function loadModels(){
+  if(faceapi?.tf?.setBackend){ try{ await faceapi.tf.setBackend('webgl'); await faceapi.tf.ready(); diag('TFJS backend:', faceapi.tf.getBackend()); }catch(e){ diag('TFJS backend set error:', e.message); } }
+  MODEL_URL = await pickModelBase();
+  if(!MODEL_URL) throw new Error('Models not reachable (Pages & Raw failed)');
+  diag('Loading models from', MODEL_URL, '…');
+  await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+  await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+  await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
+  diag('MODELS: OK ✔');
+}
+
+async function detectOnce(videoEl){
+  const tries=[
+    {inputSize:640,scoreThreshold:0.025},
+    {inputSize:512,scoreThreshold:0.025},
+    {inputSize:384,scoreThreshold:0.030},
+    {inputSize:320,scoreThreshold:0.040},
+  ];
+  for(const t of tries){
+    const res = await faceapi
+      .detectAllFaces(videoEl, new faceapi.TinyFaceDetectorOptions(t))
+      .withFaceLandmarks().withFaceExpressions();
+    if(res && res.length){
+      // pick the best by score
+      return res.reduce((b,c)=> c.detection.score>(b?.detection.score||0)?c:b, null);
     }
-  }catch(e){ log('Permissions probe error:', e.message); }
-})();
+  }
+  return null;
+}
 
-document.getElementById('btn').addEventListener('click', async ()=>{
-  // prevent double clicks
-  const btn = document.getElementById('btn');
-  btn.disabled = true;
-  try{
-    // enumerate devices first (helps spot “no camera” situations)
-    try{
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const cams = devices.filter(d=>d.kind==='videoinput');
-      log('Devices video inputs:', cams.length);
-      cams.forEach((d,i)=>log(`  [${i}]`, d.label || '(no label)', d.deviceId ? 'deviceId present' : 'no id'));
-    }catch(e){ log('enumerateDevices error:', e.message); }
+function drawFrame(){
+  ctx.save();
+  ctx.clearRect(0,0,canv.width,canv.height);
+  if($('mirror').checked){ ctx.translate(canv.width,0); ctx.scale(-1,1); }
+  ctx.drawImage(cam,0,0,canv.width,canv.height);
+  ctx.restore();
+}
 
-    const useRear = document.getElementById('rear').checked;
-    // Two-step constraint strategy: try ideal HD with facingMode, then fall back to {video:true}
-    const constraintsList = [
-      { video: { facingMode: useRear ? 'environment' : 'user', width:{ideal:1280}, height:{ideal:720} }, audio:false },
-      { video: { facingMode: useRear ? 'environment' : 'user' }, audio:false },
-      { video: true, audio:false },
-    ];
-
-    let stream = null;
-    let lastErr = null;
-    for (const c of constraintsList){
+/* ===== 5s interval test ===== */
+async function runTest5s(){
+  diag('Test starting…');
+  let ticks=0, detects=0;
+  const t0=performance.now();
+  return new Promise((resolve)=>{
+    const iv=setInterval(async ()=>{
       try{
-        log('getUserMedia attempt:', JSON.stringify(c));
-        stream = await navigator.mediaDevices.getUserMedia(c);
-        break;
-      }catch(err){
-        lastErr = err;
-        log('getUserMedia FAILED:', err.name, '-', err.message);
-        // detail overconstrained
-        if (err.name === 'OverconstrainedError' && err.constraint) {
-          log('Overconstrained constraint:', err.constraint);
+        if(performance.now()-t0>=TEST_MS){
+          clearInterval(iv);
+          diag(`Test done — detections=${detects}/${ticks} | manifest: ${MODEL_URL}/tiny_face_detector_model-weights_manifest.json`);
+          resolve(detects);
+          return;
         }
-      }
-    }
-    if (!stream) {
-      log('FATAL: No stream obtained. Common causes:');
-      log('- Permission denied (check the lock icon → Site settings → Camera → Allow)');
-      log('- In-app browser blocking camera (open in Chrome/Edge/Safari proper)');
-      log('- Another app using camera');
-      log('- Enterprise/MDM policy or extension blocking getUserMedia');
-      throw lastErr || new Error('getUserMedia failed for all constraints');
-    }
+        ticks++; pFramesEl.textContent=String(ticks);
+        drawFrame();
+        const Y=luminance();
+        let det=null;
+        try{ det=await detectOnce(cam); }catch(e){ diag('detectOnce error:', e.message); }
+        if(det){
+          detects++; pFacesEl.textContent=String(detects);
+          // IMPORTANT: draw APIs expect arrays — wrap in []
+          const r = faceapi.resizeResults([det], { width: canv.width, height: canv.height });
+          faceapi.draw.drawDetections(canv, r);
+          faceapi.draw.drawFaceLandmarks(canv, r);
+          const e=det.expressions||{};
+          diag(`✓ score=${det.detection.score.toFixed(3)} lum=${Y.toFixed(1)} happy=${(e.happy||0).toFixed(2)} neutral=${(e.neutral||0).toFixed(2)}`);
+        }else{
+          diag(`× no face (lum=${Y.toFixed(1)})`);
+        }
+      }catch(err){ diag('Tick error:', err?.message||err); }
+    }, SAMPLE_MS);
+  });
+}
 
-    cam.srcObject = stream;
-    // iOS/Safari quirks
-    cam.setAttribute('playsinline','');
-    cam.setAttribute('muted','');
-    try { await cam.play(); } catch(e){ log('video.play() error:', e.name, e.message); }
+/* ===== KPIs / Exports / Report ===== */
+function calcKPIs(){
+  const valid = frames.filter(f=>f.face);
+  const total = valid.length || 1;
+  const posFrames = valid.filter(f => (f.happy>0.30) || (f.surprised>0.30)).length;
+  const negFrames = valid.filter(f => (f.sad>0.30) || (f.angry>0.30) || (f.disgusted>0.30)).length;
+  const awareFrames = valid.filter(f => (f.happy>0.15)||(f.sad>0.15)||(f.angry>0.15)||(f.surprised>0.15)||(f.fearful>0.15)).length;
+  const PI  = clamp( (posFrames/total)*100, 0, 100 );
+  const BP  = clamp( ((posFrames - negFrames)/total)*100 + 50, 0, 100 );
+  const AWR = clamp( (awareFrames/total)*100, 0, 100 );
+  piEl.textContent  = PI.toFixed(1);
+  bpEl.textContent  = BP.toFixed(1);
+  awrEl.textContent = AWR.toFixed(1);
+  return { PI:+PI.toFixed(1), BP:+BP.toFixed(1), AWR:+AWR.toFixed(1) };
+}
+function download(name, text, type='text/plain'){ const b=new Blob([text],{type}); const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download=name; a.click(); URL.revokeObjectURL(a.href); }
+function framesCSV(rows){
+  const header=['t','happy','sad','angry','disgusted','fearful','surprised','neutral','face'];
+  return [header.join(',')].concat(rows.map(r=>[r.t,r.happy,r.sad,r.angry,r.disgusted,r.fearful,r.surprised,r.neutral,r.face].map(x=>typeof x==='number'?x.toFixed(4):x).join(','))).join('\n');
+}
+function avg(a){ return a.length? a.reduce((x,y)=>x+y,0)/a.length : 0; }
+function parseTime(t){ if(!t) return null; if(/^\d+(\.\d+)?$/.test(t)) return parseFloat(t); const m=t.match(/^(\d{1,2}):(\d{2})(?:\.(\d+))?$/); if(!m) return null; const mm=+m[1], ss=+m[2], f=m[3]?parseFloat('0.'+m[3]):0; return mm*60+ss+f; }
+function parseRange(r){ if(!r) return null; const m=r.split('-'); if(m.length!==2) return null; const s=parseTime(m[0].trim()), e=parseTime(m[1].trim()); if(isNaN(s)||isNaN(e)||e<=s) return null; return {start:s,end:e}; }
+function statsForRange(fr, range){
+  if(!range) return null; const sub=fr.filter(f=>f.face && f.t>=range.start && f.t<=range.end);
+  const ems=['happy','sad','angry','disgusted','fearful','surprised','neutral'];
+  const avgEmo=Object.fromEntries(ems.map(k=>[k, avg(sub.map(v=>+v[k]||0))]));
+  const total=sub.length||1, pos=sub.filter(f=>(f.happy>0.30)||(f.surprised>0.30)).length, neg=sub.filter(f=>(f.sad>0.30)||(f.angry>0.30)||(f.disgusted>0.30)).length, aware=sub.filter(f=>(f.happy>0.15)||(f.sad>0.15)||(f.angry>0.15)||(f.surprised>0.15)||(f.fearful>0.15)).length;
+  return { count: sub.length, avgEmo, PI:+((pos/total)*100).toFixed(1), BP:+(((pos-neg)/total)*100+50).toFixed(1), AWR:+((aware/total)*100).toFixed(1) };
+}
+function buildReportHTML(meta, kpi, fr, segs){
+  function fmtTs(s){ const mm=Math.floor(s/60), ss=Math.floor(s%60); return `${mm.toString().padStart(2,'0')}:${ss.toString().padStart(2,'0')}`; }
+  function cardKV(t,v){ return `<div class="card"><div class="muted">${t}</div><div style="font-size:28px">${v}</div></div>`; }
+  function emoGrid(avg){ return `<div class="kpis">${Object.entries(avg).map(([k,v])=>`<div class="card"><div class="muted">${k}</div><div style="font-size:22px">${(+v).toFixed(3)}</div></div>`).join('')}</div>`; }
+  const valid=fr.filter(f=>f.face), facePct=((valid.length/Math.max(1,fr.length))*100).toFixed(1), ts=new Date(meta.ts||Date.now()).toLocaleString();
+  const logo=segs.logo?.range?statsForRange(fr,segs.logo.range):null, cta=segs.cta?.range?statsForRange(fr,segs.cta.range):null, pack=segs.pack?.range?statsForRange(fr,segs.pack.range):null;
+  return `<!doctype html><html><head><meta charset="utf-8"/><title>Emotion Ad Report</title>
+  <style>body{font-family:system-ui,Arial;padding:24px;background:#0f1115;color:#e5e7eb}h1,h2{color:#fff}.kpis{display:flex;gap:12px;flex-wrap:wrap}.card{background:#121826;border:1px solid #1f2937;border-radius:12px;padding:12px;flex:1 1 220px}.muted{color:#9aa3b2}.kpis .card{min-width:180px}</style></head><body>
+  <h1>Emotion-Only Ad Report</h1><div class="muted">Generated: ${ts}</div><p class="muted">Ad: <code>${meta.ad||''}</code></p>
+  <div class="kpis">${cardKV('Purchase Intention',kpi.PI)}${cardKV('Brand Perception',kpi.BP)}${cardKV('Awareness',kpi.AWR)}${cardKV('Face-tracked frames',`${valid.length} / ${fr.length} (${facePct}%)`)}</div>
+  <h2>Emotion Averages (Whole Ad)</h2>${emoGrid(Object.fromEntries(['happy','sad','angry','disgusted','fearful','surprised','neutral'].map(k=>[k,avg(valid.map(v=>+v[k]||0))])))} 
+  ${logo?`<h2>Brand Logo ${fmtTs(segs.logo.range.start)}–${fmtTs(segs.logo.range.end)}</h2>${emoGrid(logo.avgEmo)}<div class="kpis">${cardKV('PI',logo.PI)}${cardKV('BP',logo.BP)}${cardKV('AWR',logo.AWR)}${cardKV('Frames',logo.count)}</div>`:''}
+  ${cta?`<h2>CTA ${fmtTs(segs.cta.range.start)}–${fmtTs(segs.cta.range.end)}</h2>${emoGrid(cta.avgEmo)}<div class="kpis">${cardKV('PI',cta.PI)}${cardKV('BP',cta.BP)}${cardKV('AWR',cta.AWR)}${cardKV('Frames',cta.count)}</div>`:''}
+  ${pack?`<h2>Packshot ${fmtTs(segs.pack.range.start)}–${fmtTs(segs.pack.range.end)}</h2>${emoGrid(pack.avgEmo)}<div class="kpis">${cardKV('PI',pack.PI)}${cardKV('BP',pack.BP)}${cardKV('AWR',pack.AWR)}${cardKV('Frames',pack.count)}</div>`:''}
+  <details><summary>Raw frames JSON</summary><pre>${JSON.stringify(fr,null,2)}</pre></details></body></html>`;
+}
 
-    // Log actual video size
-    await new Promise(r => requestAnimationFrame(r));
-    log('Camera stream active:', cam.videoWidth, 'x', cam.videoHeight);
-
+/* ===== Buttons ===== */
+$('btnStart').addEventListener('click', async ()=>{
+  const btn=$('btnStart'); btn.disabled=true;
+  try{
+    await startWebcam($('rear').checked);
+    await loadModels();
+    const det = await runTest5s();
+    if (det>0){ testPassed=true; $('btnPlay').disabled=false; diag('TEST: PASS → Play & analyze enabled.'); }
+    else { testPassed=false; $('btnPlay').disabled=true; diag('TEST: FAIL — improve lighting / move closer / try Rear cam / Chrome desktop.'); }
   }catch(e){
-    log('Start flow error:', e?.name || 'Error', '-', e?.message || e);
-    // surface actionable hints by error type
-    if (e && e.name === 'NotAllowedError') {
-      log('HINT: Permission denied. Click the lock icon in the address bar → Site settings → Allow Camera, then reload.');
-    } else if (e && e.name === 'NotFoundError') {
-      log('HINT: No camera found. Ensure a webcam is connected and not in use by another app.');
-    } else if (e && e.name === 'NotReadableError') {
-      log('HINT: Camera is busy (in use by another app). Close video apps (Zoom/Meet/Teams) and retry.');
-    } else if (e && e.name === 'SecurityError') {
-      log('HINT: Must use HTTPS or localhost. In-app browsers may also block camera.');
-    }
-  } finally {
-    btn.disabled = false;
+    diag('Start flow error:', e?.message||e);
+  }finally{
+    btn.disabled=false;
   }
 });
+
+$('btnPlay').addEventListener('click', async ()=>{
+  if(!testPassed){ diag('Play blocked: run the 5s test first.'); return; }
+  frames.length=0; faceFrames=0; pFacesEl.textContent='0'; pFramesEl.textContent='0';
+  ad.src = ($('adUrl').value||'').trim() || 'ads/0813.mp4';
+  try{ await ad.play(); }catch(e){ ad.muted=true; try{ await ad.play(); }catch{ log('Click the video then press Play again.'); return; } }
+  if (timer) clearInterval(timer);
+  timer=setInterval(async ()=>{
+    drawFrame();
+    let det=null; try{ det=await detectOnce(cam); }catch(e){ diag('detectOnce error:', e.message); }
+    if(det){
+      const r = faceapi.resizeResults([det], { width: canv.width, height: canv.height });
+      faceapi.draw.drawDetections(canv, r);
+      faceapi.draw.drawFaceLandmarks(canv, r);
+      const e=det.expressions||{};
+      faceFrames++; pFacesEl.textContent=String(faceFrames);
+      frames.push({ t: ad.currentTime||0, happy:+(e.happy||0), sad:+(e.sad||0), angry:+(e.angry||0), disgusted:+(e.disgusted||0), fearful:+(e.fearful||0), surprised:+(e.surprised||0), neutral:+(e.neutral||0), face:1 });
+    }else{
+      frames.push({ t: ad.currentTime||0, happy:0, sad:0, angry:0, disgusted:0, fearful:0, surprised:0, neutral:0, face:0 });
+    }
+    pFramesEl.textContent=String(frames.length);
+  }, SAMPLE_MS);
+  log('Analyzing…');
+});
+
+ad.addEventListener('ended', ()=>{
+  if (timer){ clearInterval(timer); timer=null; }
+  const k = calcKPIs();
+  log(`Done. PI=${k.PI} BP=${k.BP} AWR=${k.AWR}`);
+  $('btnCSV').disabled=false; $('btnJSON').disabled=false; $('btnReport').disabled=false;
+});
+
+$('btnCSV').addEventListener('click', ()=> download(`frames_${Date.now()}.csv`, framesCSV(frames), 'text/csv'));
+$('btnJSON').addEventListener('click', ()=>{
+  const k = calcKPIs();
+  download(`report_${Date.now()}.json`, JSON.stringify({ meta:{ ts:Date.now(), ad:$('adUrl').value }, kpi:k, frames }, null, 2), 'application/json');
+});
+$('btnReport').addEventListener('click', ()=>{
+  const k = calcKPIs();
+  const segs = {
+    logo:{range:parseRange(($('logoRange').value||'').trim())},
+    cta:{range:parseRange(($('ctaRange').value||'').trim())},
+    pack:{range:parseRange(($('packRange').value||'').trim())}
+  };
+  const html = buildReportHTML({ ts:Date.now(), ad:$('adUrl').value }, k, frames, segs);
+  download(`emotion_report_${Date.now()}.html`, html, 'text/html');
+});
+
+/* ===== Boot ===== */
+diag('ENV secure/localhost:', (location.protocol==='https:' || location.hostname==='localhost'));
 </script>
 </body>
 </html>
