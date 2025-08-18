@@ -1,105 +1,190 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
-  <title>Face/Emotion 5s Smoke Test (Your GitHub Models)</title>
-  <style>
-    body{background:#0f1115;color:#e5e7eb;font-family:system-ui,Arial;margin:16px}
-    video,canvas{border:1px solid #2a2f3d;border-radius:10px;background:#000}
-    #diag{white-space:pre-wrap;font:12px ui-monospace;background:#0b1020;border:1px solid #222;border-radius:10px;padding:10px;height:260px;overflow:auto;margin-top:10px}
-    button{padding:8px 12px;border:0;border-radius:8px;background:#2a2f3d;color:#fff;cursor:pointer}
-  </style>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.18.0/dist/tf.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+<meta charset="utf-8">
+<title>Emotion Debug — Step-Zero Self-Diagnose</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  :root { color-scheme: dark; }
+  body{background:#0f1115;color:#e5e7eb;font-family:system-ui,Arial;margin:16px}
+  video,canvas{border:1px solid #2a2f3d;border-radius:10px;background:#000}
+  #diag{white-space:pre-wrap;font:12px ui-monospace;background:#0b1020;border:1px solid #222;border-radius:10px;padding:10px;height:280px;overflow:auto;margin-top:10px}
+  button{padding:8px 12px;border:0;border-radius:8px;background:#2a2f3d;color:#fff;cursor:pointer;margin-right:6px}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start}
+  .pill{display:inline-block;padding:2px 8px;background:#1f2433;border-radius:8px;margin-left:8px}
+</style>
+
+<!-- 0) Bootstrap logger that works even if external scripts fail -->
+<script>
+  (function(){
+    const Q = [];
+    window.__diagReady = false;
+    window.__diagQ = Q;
+    window.diag = function(){ 
+      const s = Array.from(arguments).join(' ');
+      console.log('[diag]', s);
+      if (!window.__diagReady) { Q.push(s); return; }
+      const el = document.getElementById('diag');
+      if (el){ el.textContent += s + '\n'; el.scrollTop = el.scrollHeight; }
+    };
+    // Catch everything early
+    window.addEventListener('error', e => diag(`JS ERROR: ${e.message} @ ${e.filename}:${e.lineno}`));
+    window.addEventListener('unhandledrejection', e => diag(`Promise REJECTION: ${e.reason && e.reason.message ? e.reason.message : e.reason}`));
+    diag('BOOT: inline logger alive');
+  })();
+</script>
+
+<!-- 1) External libs with load/error hooks -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.18.0/dist/tf.min.js"
+        onload="diag('CDN: tfjs loaded')"
+        onerror="diag('CDN: tfjs **FAILED** to load')"></script>
+<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"
+        onload="diag('CDN: face-api loaded')"
+        onerror="diag('CDN: face-api **FAILED** to load')"></script>
 </head>
 <body>
-  <h2>5s Face/Emotion Smoke Test</h2>
-  <video id="cam" width="640" height="480" autoplay muted playsinline></video>
-  <canvas id="ov" width="640" height="480"></canvas>
-  <div style="margin-top:8px"><button id="btnTest" disabled>Run 5s Test</button></div>
-  <div id="diag">DIAG:\n</div>
+<h2>Emotion Debug
+  <span class="pill">frames: <span id="pf">0</span></span>
+  <span class="pill">faces: <span id="pc">0</span></span>
+</h2>
+
+<div class="row">
+  <div>
+    <video id="cam" width="640" height="480" autoplay muted playsinline></video>
+    <canvas id="ov" width="640" height="480"></canvas>
+    <div style="margin-top:8px">
+      <button id="btnStart">Start webcam + Load models + Run 5s test</button>
+    </div>
+  </div>
+</div>
+
+<div id="diag">DIAG:\n</div>
 
 <script>
-const MODEL_PAGES = 'https://geraldsathiyasiva.github.io/Emotion-Ai-/models';
-const MODEL_RAW   = 'https://raw.githubusercontent.com/GeraldSathiyasiva/Emotion-Ai-/main/models';
-const SAMPLE_MS = 200, TEST_MS = 5000;
-const cam = document.getElementById('cam'), ov = document.getElementById('ov'), ctx = ov.getContext('2d',{willReadFrequently:true});
-const diagEl = document.getElementById('diag'), btn = document.getElementById('btnTest');
-const log = (...a)=>{ console.log('[diag]',...a); diagEl.textContent += a.join(' ') + '\n'; diagEl.scrollTop = diagEl.scrollHeight; };
-let MODEL_URL = null;
+(function(){
+  const MODEL_PAGES = 'https://geraldsathiyasiva.github.io/Emotion-Ai-/models';
+  const MODEL_RAW   = 'https://raw.githubusercontent.com/GeraldSathiyasiva/Emotion-Ai-/main/models';
+  const SAMPLE_MS   = 200, TEST_MS = 5000;
 
-window.addEventListener('error', e => log(`JS ERROR: ${e.message} @ ${e.filename}:${e.lineno}`));
-window.addEventListener('unhandledrejection', e => log(`Promise REJECTION: ${e.reason?.message||e.reason}`));
+  const cam = document.getElementById('cam');
+  const ov  = document.getElementById('ov');
+  const ctx = ov.getContext('2d', { willReadFrequently: true });
+  const pf  = document.getElementById('pf');
+  const pc  = document.getElementById('pc');
 
-async function probe(base){
-  const u = `${base}/tiny_face_detector_model-weights_manifest.json?cb=${Date.now()}`;
-  try{ const r = await fetch(u,{cache:'no-store'}); log('PROBE', u, '→', r.status); return r.ok; }catch(e){ log('PROBE ERR', e.message); return false; }
-}
-async function pickBase(){ if (await probe(MODEL_PAGES)) return MODEL_PAGES; if (await probe(MODEL_RAW)) return MODEL_RAW; return null; }
-
-(async function init(){
-  // webcam
-  const st = await navigator.mediaDevices.getUserMedia({ video:{facingMode:'user', width:{ideal:1280}, height:{ideal:720}}, audio:false});
-  cam.srcObject = st; await cam.play(); await new Promise(r=>cam.onloadedmetadata=r);
-  ov.width = cam.videoWidth; ov.height = cam.videoHeight;
-  log('Video size:', cam.videoWidth, 'x', cam.videoHeight);
-
-  // models
-  MODEL_URL = await pickBase();
-  if (!MODEL_URL) { log('FATAL: models not reachable from GitHub'); return; }
-  if (faceapi?.tf?.setBackend){ try{ await faceapi.tf.setBackend('webgl'); await faceapi.tf.ready(); }catch{} }
-  log('TFJS backend:', (faceapi.tf?.getBackend && faceapi.tf.getBackend()) || 'n/a');
-  log('Loading models from', MODEL_URL, '…');
-  await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-  await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
-  await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
-  log('MODELS: OK');
-  btn.disabled = false;
-})();
-
-function luminance(){
-  const x=Math.max(0,Math.floor(ov.width/2)-32), y=Math.max(0,Math.floor(ov.height/2)-32);
-  const w=Math.min(64,ov.width-x), h=Math.min(64,ov.height-y);
-  const d=ctx.getImageData(x,y,w,h).data; let s=0,n=0;
-  for(let i=0;i<d.length;i+=4){ s+=0.2126*d[i]+0.7152*d[i+1]+0.0722*d[i+2]; n++; }
-  return n? s/n : 0;
-}
-async function detectOnce(){
-  const tries = [
-    { inputSize: 640, scoreThreshold: 0.025 },
-    { inputSize: 512, scoreThreshold: 0.025 },
-    { inputSize: 384, scoreThreshold: 0.030 },
-    { inputSize: 320, scoreThreshold: 0.040 },
-  ];
-  for (const t of tries){
-    const res = await faceapi.detectAllFaces(cam, new faceapi.TinyFaceDetectorOptions(t)).withFaceLandmarks().withFaceExpressions();
-    if (res && res.length) return res[0];
+  // Mark DIAG ready and flush any early logs
+  window.__diagReady = true;
+  if (Array.isArray(window.__diagQ)) {
+    window.__diagQ.forEach(s => diag(s));
+    window.__diagQ.length = 0;
   }
-  return null;
-}
+  diag('DOM: ready; DIAG bound');
 
-btn.addEventListener('click', async ()=>{
-  log(`TEST: 5s — video=${cam.videoWidth}x${cam.videoHeight} backend=${(faceapi.tf?.getBackend && faceapi.tf.getBackend())||'n/a'}`);
-  const start = performance.now(); let ticks = 0, det = 0;
-  while (performance.now() - start < TEST_MS){
-    ticks++;
-    ctx.clearRect(0,0,ov.width,ov.height);
-    ctx.drawImage(cam,0,0,ov.width,ov.height);
-    const Y = luminance();
-    let d = null;
-    try { d = await detectOnce(); } catch(e){ log('detectOnce error:', e.message); break; }
-    if (d){
-      faceapi.draw.drawDetections(ov, [d]);
-      faceapi.draw.drawFaceLandmarks(ov, [d]);
-      det++;
-      log(`✓ score=${d.detection.score.toFixed(3)} lum=${Y.toFixed(1)} happy=${(d.expressions?.happy||0).toFixed(2)} neutral=${(d.expressions?.neutral||0).toFixed(2)}`);
-    } else {
-      log(`× no face (lum=${Y.toFixed(1)})`);
+  // Environment quick checks
+  diag('ENV: location =', location.href);
+  const secureOK = (location.protocol === 'https:' || location.hostname === 'localhost');
+  diag('ENV: secure/localhost =', secureOK);
+  if (!secureOK) diag('ENV WARN: use HTTPS or http://localhost for camera.');
+
+  diag('CHECK: tfjs present =', !!(window.tf));
+  diag('CHECK: faceapi present =', !!(window.faceapi));
+
+  function luminance(){
+    const x=Math.max(0,Math.floor(ov.width/2)-32), y=Math.max(0,Math.floor(ov.height/2)-32);
+    const w=Math.min(64,ov.width-x), h=Math.min(64,ov.height-y);
+    if (w<=0 || h<=0) return 0;
+    const d=ctx.getImageData(x,y,w,h).data; let s=0,n=0;
+    for(let i=0;i<d.length;i+=4){ s+=0.2126*d[i]+0.7152*d[i+1]+0.0722*d[i+2]; n++; }
+    return n? s/n : 0;
+  }
+
+  async function probe(base){
+    const u = `${base}/tiny_face_detector_model-weights_manifest.json?cb=${Date.now()}`;
+    try{ const r=await fetch(u,{cache:'no-store'}); diag('PROBE', u, '→', r.status); return r.ok; }
+    catch(e){ diag('PROBE ERR', e.message); return false; }
+  }
+  async function pickBase(){
+    if (await probe(MODEL_PAGES)) return MODEL_PAGES;
+    if (await probe(MODEL_RAW))   return MODEL_RAW;
+    return null;
+  }
+
+  async function detectOnce(videoEl){
+    const tries = [
+      { inputSize: 640, scoreThreshold: 0.025 },
+      { inputSize: 512, scoreThreshold: 0.025 },
+      { inputSize: 384, scoreThreshold: 0.030 },
+      { inputSize: 320, scoreThreshold: 0.040 },
+    ];
+    for (const t of tries){
+      const res = await faceapi
+        .detectAllFaces(videoEl, new faceapi.TinyFaceDetectorOptions(t))
+        .withFaceLandmarks()
+        .withFaceExpressions();
+      if (res && res.length) return res[0];
     }
-    await new Promise(r=>setTimeout(r,SAMPLE_MS));
+    return null;
   }
-  log(`TEST RESULT — detections=${det}/${ticks}  manifest=${MODEL_URL}/tiny_face_detector_model-weights_manifest.json`);
-});
+
+  document.getElementById('btnStart').addEventListener('click', async ()=>{
+    try{
+      diag('STEP 1: getUserMedia support =', !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+        diag('FATAL: getUserMedia not supported in this context (in-app browser? file://?)');
+        return;
+      }
+
+      // Webcam
+      const stream = await navigator.mediaDevices.getUserMedia({ video:{facingMode:'user', width:{ideal:1280}, height:{ideal:720}}, audio:false});
+      cam.srcObject = stream; await cam.play(); await new Promise(r=>cam.onloadedmetadata=r);
+      ov.width = cam.videoWidth || 640; ov.height = cam.videoHeight || 480;
+      diag('STEP 2: webcam OK @', cam.videoWidth, 'x', cam.videoHeight);
+
+      // Models
+      if (!window.faceapi){ diag('FATAL: faceapi missing — check CDN blocked by extension/CSP.'); return; }
+      let backend = 'n/a';
+      if (faceapi?.tf?.setBackend){
+        try{ await faceapi.tf.setBackend('webgl'); await faceapi.tf.ready(); backend = faceapi.tf.getBackend(); }catch(e){ diag('TFJS backend set error:', e.message); }
+      }
+      diag('STEP 3: TFJS backend =', backend);
+
+      const base = await pickBase();
+      if (!base){ diag('FATAL: models not reachable from GitHub (Pages and Raw both failed).'); return; }
+      diag('STEP 4: loading models from', base);
+      await faceapi.nets.tinyFaceDetector.loadFromUri(base);
+      await faceapi.nets.faceLandmark68Net.loadFromUri(base);
+      await faceapi.nets.faceExpressionNet.loadFromUri(base);
+      diag('STEP 4: models loaded ✔');
+
+      // 5s test
+      diag('STEP 5: test 5s starting…');
+      const start = performance.now(); let ticks=0, det=0;
+      while (performance.now() - start < 5000){
+        ticks++;
+        ctx.clearRect(0,0,ov.width,ov.height);
+        ctx.drawImage(cam,0,0,ov.width,ov.height);
+        const Y = luminance();
+        let d = null;
+        try{ d = await detectOnce(cam); }catch(e){ diag('detectOnce error:', e.message); break; }
+        if (d){
+          faceapi.draw.drawDetections(ov, [d]);
+          faceapi.draw.drawFaceLandmarks(ov, [d]);
+          det++;
+          diag(`✓ face score=${d.detection.score.toFixed(3)} lum=${Y.toFixed(1)} happy=${(d.expressions?.happy||0).toFixed(2)} neutral=${(d.expressions?.neutral||0).toFixed(2)}`);
+        } else {
+          diag(`× no face (lum=${Y.toFixed(1)})`);
+        }
+        await new Promise(r=>setTimeout(r,SAMPLE_MS));
+      }
+      diag(`STEP 5: test done — detections=${det}/${ticks} | manifest: ${base}/tiny_face_detector_model-weights_manifest.json`);
+    }catch(err){
+      diag('FATAL in flow:', err && err.message ? err.message : err);
+    }
+  });
+
+  // auto-hint to click Start if nothing else happens
+  setTimeout(()=>{ diag('HINT: click “Start webcam + Load models + Run 5s test”'); }, 500);
+})();
 </script>
 </body>
 </html>
