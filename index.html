@@ -1,182 +1,121 @@
 <!doctype html>
-<html lang="en">
+<html>
 <head>
 <meta charset="utf-8">
-<title>Emotion Ad — GitHub Models + 5s Interval Test</title>
+<title>Camera Sanity Check</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <style>
-  :root { color-scheme: dark; }
   body{background:#0f1115;color:#e5e7eb;font-family:system-ui,Arial;margin:16px}
-  video,canvas{border:1px solid #2a2f3d;border-radius:10px;background:#000}
-  #diag{white-space:pre-wrap;font:12px ui-monospace;background:#0b1020;border:1px solid #222;border-radius:10px;padding:10px;height:300px;overflow:auto;margin-top:10px}
+  video{width:640px;max-width:100%;border:1px solid #2a2f3d;border-radius:10px;background:#000}
+  #diag{white-space:pre-wrap;font:12px ui-monospace;background:#0b1020;border:1px solid #222;border-radius:10px;padding:10px;height:260px;overflow:auto;margin-top:10px}
   button{padding:10px 14px;border:0;border-radius:10px;background:#2a2f3d;color:#fff;cursor:pointer}
-  button:disabled{opacity:.55;cursor:not-allowed}
-  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start}
-  .pill{display:inline-block;padding:2px 8px;background:#1f2433;border-radius:8px;margin-left:8px}
 </style>
-<script>
-  // Early logger so we see errors even if external scripts fail
-  (function(){
-    const Q=[]; window.__diagReady=false; window.__diagQ=Q;
-    window.diag=function(){const s=Array.from(arguments).join(' ');
-      console.log('[diag]', s);
-      if(!window.__diagReady){Q.push(s);return;}
-      const el=document.getElementById('diag'); if(el){el.textContent+=s+'\n'; el.scrollTop=el.scrollHeight;}
-    };
-    window.addEventListener('error', e=>diag(`JS ERROR: ${e.message} @ ${e.filename}:${e.lineno}`));
-    window.addEventListener('unhandledrejection', e=>diag(`Promise REJECTION: ${e.reason&&e.reason.message?e.reason.message:e.reason}`));
-    diag('BOOT: inline logger alive');
-  })();
-</script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.18.0/dist/tf.min.js"
-        onload="diag('CDN: tfjs loaded')" onerror="diag('CDN: tfjs **FAILED** to load')"></script>
-<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"
-        onload="diag('CDN: face-api loaded')" onerror="diag('CDN: face-api **FAILED** to load')"></script>
 </head>
 <body>
-<h2>Emotion Debug
-  <span class="pill">frames: <span id="pf">0</span></span>
-  <span class="pill">faces: <span id="pc">0</span></span>
-</h2>
-
-<div class="row">
-  <div>
-    <video id="cam" width="640" height="480" autoplay muted playsinline></video>
-    <canvas id="ov" width="640" height="480"></canvas>
-    <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
-      <button id="btnStart">Start webcam + Load models + Run 5s test</button>
-      <label><input id="rear" type="checkbox"> Rear camera</label>
-      <label><input id="mirror" type="checkbox" checked> Mirror</label>
-    </div>
-  </div>
+<h2>Camera Sanity Check</h2>
+<p>Click the button. If nothing appears, check the DIAG logs below — they’ll tell you exactly why.</p>
+<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+  <button id="btn">Start camera</button>
+  <label><input id="rear" type="checkbox"> Use rear camera</label>
 </div>
-
+<video id="cam" autoplay playsinline muted></video>
 <div id="diag">DIAG:\n</div>
 
 <script>
-(function(){
-  // Make DIAG live
-  window.__diagReady=true; if(Array.isArray(window.__diagQ)){window.__diagQ.forEach(s=>diag(s)); window.__diagQ.length=0;}
+const cam = document.getElementById('cam');
+const diagEl = document.getElementById('diag');
+const log = (...a)=>{ console.log('[diag]',...a); diagEl.textContent += a.join(' ') + '\n'; diagEl.scrollTop = diagEl.scrollHeight; };
 
-  const MODEL_PAGES='https://geraldsathiyasiva.github.io/Emotion-Ai-/models';
-  const MODEL_RAW  ='https://raw.githubusercontent.com/GeraldSathiyasiva/Emotion-Ai-/main/models';
-  const SAMPLE_MS=250, TEST_MS=5000; // <= interval-based test
-  const cam=document.getElementById('cam'), ov=document.getElementById('ov'), ctx=ov.getContext('2d',{willReadFrequently:true});
-  const pf=document.getElementById('pf'), pc=document.getElementById('pc');
-  const btn=document.getElementById('btnStart');
+window.addEventListener('error', e => log(`JS ERROR: ${e.message} @ ${e.filename}:${e.lineno}`));
+window.addEventListener('unhandledrejection', e => log(`Promise REJECTION: ${e.reason?.message||e.reason}`));
 
-  let MODEL_URL=null, stream=null, tickTimer=null, ticks=0, detects=0;
-
-  // Helpers
-  const clamp=(x,a,b)=>Math.min(b,Math.max(a,x));
-  function luminance(){
-    const x=Math.max(0,Math.floor(ov.width/2)-32), y=Math.max(0,Math.floor(ov.height/2)-32);
-    const w=Math.min(64,ov.width-x), h=Math.min(64,ov.height-y);
-    if (w<=0||h<=0) return 0;
-    const d=ctx.getImageData(x,y,w,h).data; let s=0,n=0;
-    for(let i=0;i<d.length;i+=4){ s+=0.2126*d[i]+0.7152*d[i+1]+0.0722*d[i+2]; n++; }
-    return n? s/n : 0;
-  }
-  async function probe(base){
-    const u=`${base}/tiny_face_detector_model-weights_manifest.json?cb=${Date.now()}`;
-    try{ const r=await fetch(u,{cache:'no-store'}); diag('PROBE', u, '→', r.status); return r.ok; }
-    catch(e){ diag('PROBE ERR', e.message); return false; }
-  }
-  async function pickBase(){ return (await probe(MODEL_PAGES))?MODEL_PAGES:((await probe(MODEL_RAW))?MODEL_RAW:null); }
-  async function detectOnce(videoEl){
-    const tries=[
-      {inputSize:640,scoreThreshold:0.025},
-      {inputSize:512,scoreThreshold:0.025},
-      {inputSize:384,scoreThreshold:0.030},
-      {inputSize:320,scoreThreshold:0.040},
-    ];
-    for(const t of tries){
-      const res=await faceapi.detectAllFaces(videoEl,new faceapi.TinyFaceDetectorOptions(t)).withFaceLandmarks().withFaceExpressions();
-      if(res && res.length) return res[0];
+(async ()=>{
+  log('ENV secure/localhost:', (location.protocol==='https:' || location.hostname==='localhost'));
+  log('Navigator:', navigator.userAgent);
+  // Permission probe (best-effort; not supported everywhere)
+  try{
+    if (navigator.permissions?.query){
+      const perm = await navigator.permissions.query({ name: 'camera' });
+      log('Permission (camera):', perm.state);
+      perm.onchange = () => log('Permission changed →', perm.state);
+    }else{
+      log('Permissions API not available');
     }
-    return null;
-  }
-
-  async function startWebcam(useRear){
-    if(stream){ try{ stream.getTracks().forEach(t=>t.stop()); }catch{} stream=null; }
-    const st=await navigator.mediaDevices.getUserMedia({ video:{ facingMode: useRear?'environment':'user', width:{ideal:1280}, height:{ideal:720} }, audio:false });
-    stream=st; cam.srcObject=st; await cam.play(); await new Promise(r=>cam.onloadedmetadata=r);
-    ov.width=cam.videoWidth||640; ov.height=cam.videoHeight||480;
-    diag('Webcam OK @', cam.videoWidth, 'x', cam.videoHeight);
-  }
-
-  async function loadModels(){
-    if(!window.faceapi){ diag('FATAL: faceapi missing'); throw new Error('faceapi missing'); }
-    if(faceapi?.tf?.setBackend){ try{ await faceapi.tf.setBackend('webgl'); await faceapi.tf.ready(); diag('TFJS backend:', faceapi.tf.getBackend()); }catch(e){ diag('TFJS backend set error:', e.message); } }
-    MODEL_URL = await pickBase();
-    if(!MODEL_URL){ throw new Error('Models not reachable (Pages & Raw failed)'); }
-    diag('Loading models from', MODEL_URL, '…');
-    await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-    await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
-    await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
-    diag('MODELS: OK');
-  }
-
-  function drawVideo(){
-    ctx.save();
-    ctx.clearRect(0,0,ov.width,ov.height);
-    if(document.getElementById('mirror').checked){ ctx.translate(ov.width,0); ctx.scale(-1,1); }
-    ctx.drawImage(cam,0,0,ov.width,ov.height);
-    ctx.restore();
-  }
-
-  async function runTest5s(){
-    // interval-based; each tick fully try/catch isolated
-    ticks=0; detects=0; pf.textContent='0'; pc.textContent='0';
-    const t0=performance.now();
-    diag('Test starting…');
-
-    tickTimer=setInterval(async()=>{
-      try{
-        if(performance.now()-t0>=TEST_MS){ clearInterval(tickTimer); tickTimer=null; diag(`Test done — detections=${detects}/${ticks} | manifest: ${MODEL_URL}/tiny_face_detector_model-weights_manifest.json`); btn.disabled=false; return; }
-        ticks++; pf.textContent=String(ticks);
-        drawVideo();
-        const Y=luminance();
-        let det=null;
-        try{ det=await detectOnce(cam); }catch(e){ diag('detectOnce error:', e.message); }
-        if(det){
-          detects++; pc.textContent=String(detects);
-          faceapi.draw.drawDetections(ov,[det]);
-          faceapi.draw.drawFaceLandmarks(ov,[det]);
-          const e=det.expressions||{};
-          diag(`✓ score=${det.detection.score.toFixed(3)} lum=${Y.toFixed(1)} happy=${(e.happy||0).toFixed(2)} neutral=${(e.neutral||0).toFixed(2)}`);
-        }else{
-          diag(`× no face (lum=${Y.toFixed(1)})`);
-        }
-      }catch(err){
-        diag('Tick error:', err && err.message ? err.message : err);
-      }
-    }, SAMPLE_MS);
-  }
-
-  // Button flow
-  btn.addEventListener('click', async ()=>{
-    if(btn.disabled) return;
-    btn.disabled=true;
-    try{
-      diag('STEP 1: getUserMedia support =', !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
-      await startWebcam(document.getElementById('rear').checked);
-      await loadModels();
-      await runTest5s();
-    }catch(err){
-      diag('FATAL in flow:', err && err.message ? err.message : err);
-      btn.disabled=false;
-    }
-  });
-
-  // environment hints
-  diag('ENV: location =', location.href);
-  const secureOK = (location.protocol==='https:' || location.hostname==='localhost');
-  diag('ENV: secure/localhost =', secureOK);
-  diag('CHECK: tfjs present =', !!window.tf);
-  diag('CHECK: faceapi present =', !!window.faceapi);
-  setTimeout(()=>diag('HINT: click “Start webcam + Load models + Run 5s test”'), 400);
+  }catch(e){ log('Permissions probe error:', e.message); }
 })();
+
+document.getElementById('btn').addEventListener('click', async ()=>{
+  // prevent double clicks
+  const btn = document.getElementById('btn');
+  btn.disabled = true;
+  try{
+    // enumerate devices first (helps spot “no camera” situations)
+    try{
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cams = devices.filter(d=>d.kind==='videoinput');
+      log('Devices video inputs:', cams.length);
+      cams.forEach((d,i)=>log(`  [${i}]`, d.label || '(no label)', d.deviceId ? 'deviceId present' : 'no id'));
+    }catch(e){ log('enumerateDevices error:', e.message); }
+
+    const useRear = document.getElementById('rear').checked;
+    // Two-step constraint strategy: try ideal HD with facingMode, then fall back to {video:true}
+    const constraintsList = [
+      { video: { facingMode: useRear ? 'environment' : 'user', width:{ideal:1280}, height:{ideal:720} }, audio:false },
+      { video: { facingMode: useRear ? 'environment' : 'user' }, audio:false },
+      { video: true, audio:false },
+    ];
+
+    let stream = null;
+    let lastErr = null;
+    for (const c of constraintsList){
+      try{
+        log('getUserMedia attempt:', JSON.stringify(c));
+        stream = await navigator.mediaDevices.getUserMedia(c);
+        break;
+      }catch(err){
+        lastErr = err;
+        log('getUserMedia FAILED:', err.name, '-', err.message);
+        // detail overconstrained
+        if (err.name === 'OverconstrainedError' && err.constraint) {
+          log('Overconstrained constraint:', err.constraint);
+        }
+      }
+    }
+    if (!stream) {
+      log('FATAL: No stream obtained. Common causes:');
+      log('- Permission denied (check the lock icon → Site settings → Camera → Allow)');
+      log('- In-app browser blocking camera (open in Chrome/Edge/Safari proper)');
+      log('- Another app using camera');
+      log('- Enterprise/MDM policy or extension blocking getUserMedia');
+      throw lastErr || new Error('getUserMedia failed for all constraints');
+    }
+
+    cam.srcObject = stream;
+    // iOS/Safari quirks
+    cam.setAttribute('playsinline','');
+    cam.setAttribute('muted','');
+    try { await cam.play(); } catch(e){ log('video.play() error:', e.name, e.message); }
+
+    // Log actual video size
+    await new Promise(r => requestAnimationFrame(r));
+    log('Camera stream active:', cam.videoWidth, 'x', cam.videoHeight);
+
+  }catch(e){
+    log('Start flow error:', e?.name || 'Error', '-', e?.message || e);
+    // surface actionable hints by error type
+    if (e && e.name === 'NotAllowedError') {
+      log('HINT: Permission denied. Click the lock icon in the address bar → Site settings → Allow Camera, then reload.');
+    } else if (e && e.name === 'NotFoundError') {
+      log('HINT: No camera found. Ensure a webcam is connected and not in use by another app.');
+    } else if (e && e.name === 'NotReadableError') {
+      log('HINT: Camera is busy (in use by another app). Close video apps (Zoom/Meet/Teams) and retry.');
+    } else if (e && e.name === 'SecurityError') {
+      log('HINT: Must use HTTPS or localhost. In-app browsers may also block camera.');
+    }
+  } finally {
+    btn.disabled = false;
+  }
+});
 </script>
 </body>
 </html>
