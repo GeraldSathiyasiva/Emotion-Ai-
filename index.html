@@ -2,18 +2,18 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Emotion Autorun — Camera + GitHub Models + 5s Test</title>
+<title>Emotion Autorun — Camera + Models + 5s Test (Watchdog)</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <style>
   :root { color-scheme: dark; }
   body{background:#0f1115;color:#e5e7eb;font-family:system-ui,Arial;margin:16px}
   video,canvas{border:1px solid #2a2f3d;border-radius:10px;background:#000;max-width:100%}
-  #diag{white-space:pre-wrap;font:12px ui-monospace;background:#0b1020;border:1px solid #222;border-radius:10px;padding:10px;height:320px;overflow:auto;margin-top:10px}
+  #diag{white-space:pre-wrap;font:12px ui-monospace;background:#0b1020;border:1px solid #222;border-radius:10px;padding:10px;height:340px;overflow:auto;margin-top:10px}
   .pill{display:inline-block;padding:2px 8px;background:#1f2433;border-radius:8px;margin-left:8px}
 </style>
 
 <script>
-/* Early logger so we see **anything** that happens */
+/* Early logger */
 (function(){
   const Q=[]; window.__diagReady=false; window.__diagQ=Q;
   window.diag=function(){ const s=[...arguments].join(' '); console.log('[diag]',s);
@@ -25,17 +25,16 @@
   diag('BOOT: inline logger alive');
 })();
 </script>
-
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.18.0/dist/tf.min.js?v=autorun"
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.18.0/dist/tf.min.js?v=wg"
         onload="diag('CDN: tfjs loaded')" onerror="diag('CDN: tfjs **FAILED** to load')"></script>
-<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js?v=autorun"
+<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js?v=wg"
         onload="diag('CDN: face-api loaded')" onerror="diag('CDN: face-api **FAILED** to load')"></script>
 </head>
 <body>
-<h2>Autorun Face/Emotion 5s Test
+<h2>Autorun 5s Test
   <span class="pill">frames: <span id="pf">0</span></span>
   <span class="pill">faces: <span id="pc">0</span></span>
-  <span class="pill">build: autorun-001</span>
+  <span class="pill">build: wg-002</span>
 </h2>
 
 <video id="cam" width="640" height="480" autoplay muted playsinline></video>
@@ -59,26 +58,61 @@ window.__diagReady=true; if(Array.isArray(window.__diagQ)){ window.__diagQ.forEa
   diag('ENV secure/localhost:', (location.protocol==='https:' || location.hostname==='localhost'));
   diag('UA:', navigator.userAgent);
 
-  /* 1) Start webcam immediately */
+  // Live permission state (if supported)
   try{
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video:{ facingMode:'user', width:{ideal:1280}, height:{ideal:720} }, audio:false
-    });
+    if(navigator.permissions?.query){
+      const p = await navigator.permissions.query({ name: 'camera' });
+      diag('Permission (camera):', p.state);
+      p.onchange = ()=>diag('Permission changed →', p.state);
+    }
+  }catch(e){ diag('Permissions API error:', e.message); }
+
+  /* 1) Start webcam with watchdog + fallbacks */
+  async function getStreamWithWatchdog(){
+    const attempts = [
+      { video:{ facingMode:'user', width:{ideal:1280}, height:{ideal:720} }, audio:false },
+      { video:{ facingMode:'user' }, audio:false },
+      { video:true, audio:false },
+    ];
+    for (let i=0;i<attempts.length;i++){
+      const c = attempts[i];
+      diag('getUserMedia attempt', i+1, '/', attempts.length, JSON.stringify(c));
+      let waited = 0;
+      const heartbeat = setInterval(()=>{ waited+=1000; diag(`… waiting for camera prompt (${waited/1000}s)`); }, 1000);
+      try{
+        const stream = await navigator.mediaDevices.getUserMedia(c);
+        clearInterval(heartbeat);
+        return stream;
+      }catch(err){
+        clearInterval(heartbeat);
+        diag('getUserMedia FAILED:', err.name, '-', err.message);
+        if (err.name === 'NotAllowedError'){
+          diag('HINT: Click the lock icon → Site settings → Camera → Allow, then reload.');
+          throw err; // permission denied stops here
+        }
+        // Continue to next constraints on Overconstrained/NotFound/etc.
+        if (i === attempts.length-1) throw err;
+      }
+    }
+  }
+
+  try{
+    const stream = await getStreamWithWatchdog();
     cam.srcObject=stream; await cam.play(); await new Promise(r=>cam.onloadedmetadata=r);
     ov.width=cam.videoWidth||640; ov.height=cam.videoHeight||480;
     diag('Webcam OK @', cam.videoWidth, 'x', cam.videoHeight);
   }catch(e){
-    diag('FATAL: getUserMedia:', e.name, e.message);
+    diag('FATAL: camera:', e.name || 'Error', '-', e.message || e);
     return;
   }
 
   /* 2) Pick model host (Pages → Raw) */
   async function probe(base){
     const u=`${base}/tiny_face_detector_model-weights_manifest.json?cb=${Date.now()}`;
-    try{ const r=await fetch(u,{cache:'no-store'}); diag('PROBE', u, '→', r.status); return r.ok? base : null; }
+    try{ const r=await fetch(u,{cache:'no-store'}); diag('PROBE', u, '→', r.status); return r.ok ? base : null; }
     catch(err){ diag('PROBE ERR', err.message); return null; }
   }
-  let MODEL_URL = await probe(MODEL_PAGES) || await probe(MODEL_RAW);
+  const MODEL_URL = await probe(MODEL_PAGES) || await probe(MODEL_RAW);
   if(!MODEL_URL){ diag('FATAL: models not reachable'); return; }
   diag('MODEL_URL =', MODEL_URL);
 
@@ -121,7 +155,7 @@ window.__diagReady=true; if(Array.isArray(window.__diagQ)){ window.__diagQ.forEa
     return null;
   }
 
-  /* 5) Autorun 5s test with setInterval (guaranteed ticks) */
+  /* 5) 5-second interval test */
   diag('Test starting…');
   let ticks=0, detects=0;
   const t0=performance.now();
@@ -139,17 +173,14 @@ window.__diagReady=true; if(Array.isArray(window.__diagQ)){ window.__diagQ.forEa
       try{ det=await detectOnce(cam); }catch(e){ diag('detectOnce error:', e.message); }
       if(det){
         detects++; pc.textContent=String(detects);
-        // draw expects arrays:
-        faceapi.draw.drawDetections(ov, [det]);
-        faceapi.draw.drawFaceLandmarks(ov, [det]);
+        faceapi.draw.drawDetections(ov,[det]);
+        faceapi.draw.drawFaceLandmarks(ov,[det]);
         const e=det.expressions||{};
         diag(`✓ score=${det.detection.score.toFixed(3)} lum=${Y.toFixed(1)} happy=${(e.happy||0).toFixed(2)} neutral=${(e.neutral||0).toFixed(2)}`);
       }else{
         diag(`× no face (lum=${Y.toFixed(1)})`);
       }
-    }catch(err){
-      diag('Tick error:', err?.message||err);
-    }
+    }catch(err){ diag('Tick error:', err?.message||err); }
   }, SAMPLE_MS);
 })();
 </script>
