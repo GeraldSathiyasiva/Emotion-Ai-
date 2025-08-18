@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Emotion Ad — Auto GitHub Models + 5s Test</title>
+<title>Emotion Ad — GitHub Models + 5s Test (Robust)</title>
 <style>
   :root { color-scheme: dark; }
   body { font-family: system-ui, Arial, sans-serif; margin:16px; background:#0f1115; color:#e5e7eb; }
@@ -21,6 +21,8 @@
   .kpi{display:flex;gap:10px;margin-top:10px}
   .kpi>div{flex:1 1 0;background:#101520;border:1px solid #222;border-radius:10px;padding:10px;text-align:center}
   .warn{background:#3b0d0d;color:#ffdada;border:1px solid #5c1212;border-radius:8px;padding:8px 12px;margin-bottom:10px;display:none}
+  .row.controls {display:flex; gap:10px; flex-wrap:wrap; align-items:center}
+  .row.controls label { font-weight:500; margin:0 }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.18.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
@@ -48,14 +50,16 @@
       </div>
     </div>
 
-    <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap">
+    <div class="row controls" style="margin-top:10px">
       <button id="btnCam">Start webcam</button>
       <button id="btnTest" disabled>Test 5s</button>
       <button id="btnPlay" disabled>Play & analyze</button>
       <button id="btnCSV" disabled>Download CSV</button>
       <button id="btnJSON" disabled>Download JSON</button>
       <button id="btnReport" disabled>Generate Report</button>
-      <span id="status" style="align-self:center;color:#9aa3b2">Booting…</span>
+      <label><input id="flip" type="checkbox" checked /> Mirror</label>
+      <label><input id="rear" type="checkbox" /> Rear camera</label>
+      <span id="status" style="color:#9aa3b2">Booting…</span>
     </div>
 
     <div class="kpi">
@@ -84,13 +88,14 @@ const SAMPLE_MS = 200;
 
 /* ===== DOM / State ===== */
 const $=id=>document.getElementById(id);
-const ad=$('ad'), cam=$('cam'), canv=$('overlay'), ctx=canv.getContext('2d');
+const ad=$('ad'), cam=$('cam'), canv=$('overlay'), ctx=canv.getContext('2d',{willReadFrequently:true});
 const statusEl=$('status'), diagEl=$('diag');
 const pFramesEl=$('pFrames'), pFacesEl=$('pFaces');
 const piEl=$('pi'), bpEl=$('bp'), awrEl=$('awr');
 let MODEL_URL=null;
 let webcamReady=false, modelsReady=false, testPassed=false;
 let timer=null, frames=[], faceFrames=0;
+let lastStream=null;
 
 /* ===== Utils ===== */
 const log=(...a)=>statusEl.textContent=a.join(' ');
@@ -120,21 +125,27 @@ async function pickModelBase(){
 }
 
 /* ===== Webcam ===== */
-$('btnCam').addEventListener('click', startWebcam);
-async function startWebcam(){
+$('btnCam').addEventListener('click', ()=>startWebcam($('rear').checked));
+$('rear').addEventListener('change', e=>{
+  if(lastStream){ lastStream.getTracks().forEach(t=>t.stop()); }
+  startWebcam(e.target.checked);
+});
+
+async function startWebcam(useRear=false){
   try{
-    diag('Requesting webcam…');
-    const st = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:{ideal:1280}, height:{ideal:720} }, audio:false });
+    diag('Requesting webcam… facing=', useRear?'environment':'user');
+    const st = await navigator.mediaDevices.getUserMedia({
+      video:{ facingMode: useRear?'environment':'user', width:{ideal:1280}, height:{ideal:720} },
+      audio:false
+    });
+    lastStream = st;
     cam.srcObject = st; await cam.play(); await new Promise(r=>cam.onloadedmetadata=r);
     canv.width = cam.videoWidth || 640; canv.height = cam.videoHeight || 480;
-    webcamReady=true; log(`Webcam ready ${canv.width}x${canv.height}`);
-    diag('Picking model host (GitHub Pages → Raw)…');
+    webcamReady=true; log(`Webcam ${cam.videoWidth}x${cam.videoHeight}`);
+    diag('Video size:', cam.videoWidth, 'x', cam.videoHeight);
+
     MODEL_URL = await pickModelBase();
-    if(!MODEL_URL){
-      diag('FATAL: Could not find models on GitHub. Make sure the files are publicly reachable.');
-      alert('Could not load models from GitHub Pages or Raw. Open DevTools → Network to see which URL 404s.');
-      return;
-    }
+    if(!MODEL_URL){ diag('FATAL: Could not find models on GitHub.'); alert('Models not reachable from Pages or Raw.'); return; }
     diag('MODEL_URL =', MODEL_URL);
     await loadModels(MODEL_URL);
     $('btnTest').disabled = false;
@@ -146,7 +157,12 @@ async function startWebcam(){
 /* ===== Models ===== */
 async function loadModels(base){
   try{
-    if (faceapi?.tf?.setBackend){ try{ await faceapi.tf.setBackend('webgl'); await faceapi.tf.ready(); diag('TFJS backend: webgl'); }catch(e){ diag('TFJS backend set failed:', e?.message||e); } }
+    if (faceapi?.tf?.setBackend){
+      try{ await faceapi.tf.setBackend('webgl'); await faceapi.tf.ready(); diag('TFJS backend:', faceapi.tf.getBackend()); }
+      catch(e){ diag('TFJS backend set failed:', e?.message||e); }
+    } else {
+      diag('TFJS backend API unavailable');
+    }
     diag('Loading models from', base, '…');
     await faceapi.nets.tinyFaceDetector.loadFromUri(base);
     await faceapi.nets.faceLandmark68Net.loadFromUri(base);
@@ -158,12 +174,26 @@ async function loadModels(base){
   }
 }
 
-/* ===== Detection ===== */
+/* ===== Brightness check (center 64×64) ===== */
+function luminanceSample(){
+  const w=canv.width, h=canv.height;
+  if(!w||!h) return 0;
+  const cx=Math.floor(w/2)-32, cy=Math.floor(h/2)-32;
+  const img=ctx.getImageData(Math.max(0,cx), Math.max(0,cy), 64, 64).data;
+  let sum=0, n=0;
+  for(let i=0;i<img.length;i+=4){ const r=img[i], g=img[i+1], b=img[i+2]; sum += 0.2126*r+0.7152*g+0.0722*b; n++; }
+  return n? (sum/n) : 0;
+}
+
+/* ===== Detection (aggressive sweep) ===== */
 async function detectOnce(videoEl){
   const tries = [
-    { inputSize: 512, scoreThreshold: 0.06 },
-    { inputSize: 384, scoreThreshold: 0.06 },
-    { inputSize: 320, scoreThreshold: 0.05 },
+    { inputSize: 640, scoreThreshold: 0.025 },
+    { inputSize: 576, scoreThreshold: 0.025 },
+    { inputSize: 512, scoreThreshold: 0.025 },
+    { inputSize: 448, scoreThreshold: 0.025 },
+    { inputSize: 384, scoreThreshold: 0.030 },
+    { inputSize: 320, scoreThreshold: 0.035 },
   ];
   for (const opt of tries){
     const res = await faceapi
@@ -179,39 +209,47 @@ async function detectOnce(videoEl){
 /* ===== 5s TEST ===== */
 $('btnTest').addEventListener('click', async ()=>{
   if(!webcamReady || !modelsReady){ diag('TEST blocked: webcam/models not ready'); return; }
-  diag('TEST: Starting 5s detection… keep your face centered & lit.');
-  const testFrames=[]; const start = performance.now();
+  diag('TEST: 5s — keep face centered. If no detections, watch DIAG for brightness & scores.');
+  const facedExpr = []; let detectedFrames=0;
+  const start = performance.now();
 
   while (performance.now() - start < TEST_SECONDS*1000){
+    // draw
+    ctx.save();
     ctx.clearRect(0,0,canv.width,canv.height);
-    if (cam.readyState >= 2) ctx.drawImage(cam,0,0,canv.width,canv.height);
+    if ($('flip').checked){
+      ctx.translate(canv.width,0); ctx.scale(-1,1);
+    }
+    ctx.drawImage(cam,0,0,canv.width,canv.height);
+    ctx.restore();
+
+    const Y = luminanceSample().toFixed(1);
+    if (Y < 35) diag(`Too dark? center luminance=${Y} (aim > 50)`);
+
     const det = await detectOnce(cam);
     if(det){
       const r = faceapi.resizeResults(det, { width: canv.width, height: canv.height });
       faceapi.draw.drawDetections(canv, r);
       faceapi.draw.drawFaceLandmarks(canv, r);
-      testFrames.push(det.expressions || {});
+      facedExpr.push(det.expressions||{});
+      detectedFrames++;
+      diag(`✓ face score=${det.detection.score.toFixed(3)} size=${Math.round(det.detection.box.width)}x${Math.round(det.detection.box.height)} lum=${Y}`);
     }else{
-      testFrames.push(null);
+      diag(`× no face (lum=${Y})`);
     }
     await new Promise(r=>setTimeout(r,SAMPLE_MS));
   }
 
-  const faced = testFrames.filter(Boolean);
-  const avg = k => faced.length ? faced.reduce((s,v)=>s+(+v[k]||0),0)/faced.length : 0;
-  diag(
-    `TEST RESULT — frames=${testFrames.length}, faceFrames=${faced.length}`,
-    `avg(happy)=${avg('happy').toFixed(3)} sad=${avg('sad').toFixed(3)} angry=${avg('angry').toFixed(3)} disgusted=${avg('disgusted').toFixed(3)} fearful=${avg('fearful').toFixed(3)} surprised=${avg('surprised').toFixed(3)} neutral=${avg('neutral').toFixed(3)}`
-  );
+  // summary
+  const avg = k => facedExpr.length ? facedExpr.reduce((s,v)=>s+(+v[k]||0),0)/facedExpr.length : 0;
+  diag(`TEST RESULT — detectedFrames=${detectedFrames}/${Math.ceil(TEST_SECONDS*1000/SAMPLE_MS)}  avg(happy)=${avg('happy').toFixed(3)} sad=${avg('sad').toFixed(3)} angry=${avg('angry').toFixed(3)} disgusted=${avg('disgusted').toFixed(3)} fearful=${avg('fearful').toFixed(3)} surprised=${avg('surprised').toFixed(3)} neutral=${avg('neutral').toFixed(3)}`);
 
-  if (faced.length > 0){
-    testPassed = true;
-    $('btnPlay').disabled = false;
-    diag('TEST: PASS → Play & analyze enabled.');
+  if (detectedFrames>0){
+    testPassed = true; $('btnPlay').disabled = false; diag('TEST: PASS → Play & analyze enabled.');
   }else{
-    testPassed = false;
-    $('btnPlay').disabled = true;
-    diag('TEST: FAIL → No face seen. Improve lighting / move closer / center face and re-run test.');
+    testPassed = false; $('btnPlay').disabled = true;
+    diag('TEST: FAIL → Try: more front light; move closer (face ~25% of frame); uncheck Mirror; toggle Rear camera; try Chrome/Edge desktop; confirm manifest URL loads in browser.');
+    diag('Check URL now:', `${MODEL_URL}/tiny_face_detector_model-weights_manifest.json`);
   }
 });
 
@@ -232,8 +270,12 @@ $('btnPlay').addEventListener('click', async ()=>{
   try{ await ad.play(); }catch(e){ ad.muted=true; try{ await ad.play(); }catch{ log('Click the video to start, then click Play & analyze again.'); return; } }
   if (timer) clearInterval(timer);
   timer = setInterval(async ()=>{
+    ctx.save();
     ctx.clearRect(0,0,canv.width,canv.height);
-    if (cam.readyState >= 2) ctx.drawImage(cam,0,0,canv.width,canv.height);
+    if ($('flip').checked){ ctx.translate(canv.width,0); ctx.scale(-1,1); }
+    ctx.drawImage(cam,0,0,canv.width,canv.height);
+    ctx.restore();
+
     const det = await detectOnce(cam);
     if(det){
       const r = faceapi.resizeResults(det, { width: canv.width, height: canv.height });
@@ -256,7 +298,7 @@ ad.addEventListener('ended', ()=>{
   $('btnCSV').disabled=false; $('btnJSON').disabled=false; $('btnReport').disabled=false;
 });
 
-/* ===== KPIs + Exports + Report ===== */
+/* ===== KPIs + Exports + Report (unchanged essentials) ===== */
 function calcKPIs(){
   const valid = frames.filter(f=>f.face);
   const total = valid.length || 1;
@@ -271,15 +313,8 @@ function calcKPIs(){
   awrEl.textContent = AWR.toFixed(1);
   return { PI:+PI.toFixed(1), BP:+BP.toFixed(1), AWR:+AWR.toFixed(1) };
 }
-
-function download(name, text, type='text/plain'){
-  const blob = new Blob([text], {type}); const a=document.createElement('a');
-  a.href=URL.createObjectURL(blob); a.download=name; a.click(); URL.revokeObjectURL(a.href);
-}
-function framesCSV(rows){
-  const header = ['t','happy','sad','angry','disgusted','fearful','surprised','neutral','face'];
-  return [header.join(',')].concat(rows.map(r=>[r.t,r.happy,r.sad,r.angry,r.disgusted,r.fearful,r.surprised,r.neutral,r.face].map(x=>typeof x==='number'?x.toFixed(4):x).join(','))).join('\\n');
-}
+function download(name, text, type='text/plain'){ const blob=new Blob([text],{type}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; a.click(); URL.revokeObjectURL(a.href); }
+function framesCSV(rows){ const header = ['t','happy','sad','angry','disgusted','fearful','surprised','neutral','face']; return [header.join(',')].concat(rows.map(r=>[r.t,r.happy,r.sad,r.angry,r.disgusted,r.fearful,r.surprised,r.neutral,r.face].map(x=>typeof x==='number'?x.toFixed(4):x).join(','))).join('\\n'); }
 function avg(a){ return a.length? a.reduce((x,y)=>x+y,0)/a.length : 0; }
 function statsForRange(fr, range){
   if(!range) return null; const sub=fr.filter(f=>f.face && f.t>=range.start && f.t<=range.end);
@@ -292,7 +327,7 @@ function buildReportHTML(meta, kpi, fr, segs){
   function fmtTs(s){ const mm=Math.floor(s/60), ss=Math.floor(s%60); return `${mm.toString().padStart(2,'0')}:${ss.toString().padStart(2,'0')}`; }
   function cardKV(t,v){ return `<div class="card"><div class="muted">${t}</div><div style="font-size:28px">${v}</div></div>`; }
   function emoGrid(avg){ return `<div class="kpis">${Object.entries(avg).map(([k,v])=>`<div class="card"><div class="muted">${k}</div><div style="font-size:22px">${(+v).toFixed(3)}</div></div>`).join('')}</div>`; }
-  const valid=fr.filter(f=>f.face), facePct=((valid.length/Math.max(1,fr.length))*100).toFixed(1), ts=new Date(meta.ts).toLocaleString();
+  const valid=fr.filter(f=>f.face), facePct=((valid.length/Math.max(1,fr.length))*100).toFixed(1), ts=new Date(meta.ts||Date.now()).toLocaleString();
   const logo=segs.logo?.range?statsForRange(fr,segs.logo.range):null, cta=segs.cta?.range?statsForRange(fr,segs.cta.range):null, pack=segs.pack?.range?statsForRange(fr,segs.pack.range):null;
   return `<!doctype html><html><head><meta charset="utf-8"/><title>Emotion Ad Report</title>
   <style>body{font-family:system-ui,Arial;padding:24px;background:#0f1115;color:#e5e7eb}h1,h2{color:#fff}.kpis{display:flex;gap:12px;flex-wrap:wrap}.card{background:#121826;border:1px solid #1f2937;border-radius:12px;padding:12px;flex:1 1 220px}.muted{color:#9aa3b2}.row{display:flex;gap:12px;flex-wrap:wrap}</style></head><body>
@@ -304,17 +339,9 @@ function buildReportHTML(meta, kpi, fr, segs){
   ${pack?`<h2>Packshot ${fmtTs(segs.pack.range.start)}–${fmtTs(segs.pack.range.end)}</h2>${emoGrid(pack.avgEmo)}<div class="kpis">${cardKV('PI',pack.PI)}${cardKV('BP',pack.BP)}${cardKV('AWR',pack.AWR)}${cardKV('Frames',pack.count)}</div>`:''}
   <details><summary>Raw frames JSON</summary><pre>${JSON.stringify(fr,null,2)}</pre></details></body></html>`;
 }
-
 $('btnCSV').addEventListener('click', ()=> download(`frames_${Date.now()}.csv`, framesCSV(frames), 'text/csv'));
-$('btnJSON').addEventListener('click', ()=>{
-  const k = calcKPIs(); download(`report_${Date.now()}.json`, JSON.stringify({ meta:{ ts:Date.now(), ad:$('adUrl').value }, kpi:k, frames }, null, 2), 'application/json');
-});
-$('btnReport').addEventListener('click', ()=>{
-  const k = calcKPIs();
-  const segs = { logo:{range:parseRange(($('logoRange').value||'').trim())}, cta:{range:parseRange(($('ctaRange').value||'').trim())}, pack:{range:parseRange(($('packRange').value||'').trim())} };
-  const html = buildReportHTML({ ts:Date.now(), ad:$('adUrl').value }, k, frames, segs);
-  download(`emotion_report_${Date.now()}.html`, html, 'text/html');
-});
+$('btnJSON').addEventListener('click', ()=>{ const k = calcKPIs(); download(`report_${Date.now()}.json`, JSON.stringify({ meta:{ ts:Date.now(), ad:$('adUrl').value }, kpi:k, frames }, null, 2), 'application/json'); });
+$('btnReport').addEventListener('click', ()=>{ const k = calcKPIs(); const segs = { logo:{range:parseRange(($('logoRange').value||'').trim())}, cta:{range:parseRange(($('ctaRange').value||'').trim())}, pack:{range:parseRange(($('packRange').value||'').trim())} }; const html = buildReportHTML({ ts:Date.now(), ad:$('adUrl').value }, k, frames, segs); download(`emotion_report_${Date.now()}.html`, html, 'text/html'); });
 
 /* ===== Boot ===== */
 diagEl.textContent='DIAG:\\nPage loaded. Booting…\\n';
