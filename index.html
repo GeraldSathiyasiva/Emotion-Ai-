@@ -3,169 +3,155 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>MediaPipe Blendshape Emotions (Web)</title>
+  <title>Ad + MediaPipe Emotions — Tracking & Report</title>
   <style>
     :root { color-scheme: dark; }
-    body { margin:0; min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; background:#0f1115; color:#fff; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; }
-    #container { position:relative; width:100%; max-width:420px; }
-    video { width:100%; border-radius:14px; background:#000; display:block; }
-    canvas { position:absolute; inset:0; pointer-events:none; border-radius:14px; }
-    #hud { width:100%; max-width:420px; display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:10px; }
-    #status { opacity:.95; }
-    #fps { opacity:.7; }
-    .chip {
-      position:absolute; left:50%; transform:translateX(-50%);
-      background:rgba(255,255,255,.12); padding:6px 12px; border-radius:999px;
-      font-weight:600; backdrop-filter: blur(6px); box-shadow:0 6px 18px rgba(0,0,0,.2);
-    }
+    body { margin:0; padding:16px; background:#0f1115; color:#fff;
+           font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; }
+    h2 { margin:8px 0 16px; }
+    .row { display:flex; gap:14px; flex-wrap:wrap; align-items:flex-start; }
+    .panel { flex:1 1 560px; min-width:320px; background:#131722;
+             border:1px solid #222; border-radius:12px; padding:12px; }
+    .col { display:flex; flex-direction:column; gap:10px; }
+    video { width:100%; border-radius:12px; background:#000; display:block; }
+    canvas { position:absolute; inset:0; pointer-events:none; border-radius:12px; }
+    #camWrap { position:relative; }
+    #hud { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    input[type="text"]{ width:100%; padding:8px 10px; border-radius:8px;
+                        border:1px solid #333; background:#161a26; color:#fff; }
+    button { padding:9px 12px; border:0; border-radius:10px; background:#2a2a2a; color:#fff; cursor:pointer; }
+    button:disabled{opacity:.55; cursor:not-allowed}
+    .chip { position:absolute; left:50%; transform:translateX(-50%);
+            background:rgba(255,255,255,.12); padding:6px 12px; border-radius:999px;
+            font-weight:600; backdrop-filter: blur(6px); box-shadow:0 6px 18px rgba(0,0,0,.2); }
     #chipMain { top:10px; }
     #chipSubtle { top:44px; display:none; background:rgba(88,170,255,.18); }
-    .row { margin-top:10px; display:flex; gap:8px; align-items:center; }
-    button { padding:8px 12px; border:0; border-radius:10px; background:#2a2a2a; color:#fff; cursor:pointer; }
+    #diag { white-space:pre-wrap; font:12px ui-monospace; max-height:220px; overflow:auto;
+            background:#0b1020; border:1px solid #222; border-radius:10px; padding:10px; }
+    .grid { display:grid; grid-template-columns: repeat(3,minmax(140px,1fr)); gap:8px; }
+    .muted{ color:#9aa3b2 }
   </style>
 </head>
 <body>
-  <div id="container">
-    <video id="video" autoplay muted playsinline></video>
-    <canvas id="overlay"></canvas>
-    <div id="chipMain"   class="chip">😐 Neutral</div>
-    <div id="chipSubtle" class="chip">Subtle: —</div>
-  </div>
-
-  <div id="hud">
-    <div id="status">Loading MediaPipe…</div>
-    <div id="fps"></div>
-  </div>
+  <h2>Emotion Tracking for Ad (MediaPipe Blendshape)</h2>
 
   <div class="row">
-    <button id="recal">Re-calibrate (neutral)</button>
-    <button id="perf">Performance: High</button>
+    <!-- Left: Ad player -->
+    <div class="panel" style="flex:1 1 520px;">
+      <div class="col">
+        <label class="muted">Ad URL (MP4)</label>
+        <input id="adUrl" type="text" value="ads/0813.mp4" />
+        <video id="ad" controls playsinline></video>
+
+        <div class="grid">
+          <div><span class="muted">Logo (mm:ss-mm:ss)</span><input id="logoRange" type="text" placeholder="00:02-00:04" /></div>
+          <div><span class="muted">CTA (mm:ss-mm:ss)</span><input id="ctaRange" type="text" placeholder="00:04-00:06" /></div>
+          <div><span class="muted">Packshot (mm:ss-mm:ss)</span><input id="packRange" type="text" placeholder="00:06-00:07" /></div>
+        </div>
+
+        <div id="hud">
+          <button id="btnStart">Start camera + model</button>
+          <button id="btnPlay" disabled>Play & analyze</button>
+          <button id="btnCSV" disabled>Download CSV</button>
+          <button id="btnJSON" disabled>Download JSON</button>
+          <button id="btnReport" disabled>Report HTML</button>
+          <label><input id="mirror" type="checkbox" checked> Mirror</label>
+          <span id="status" class="muted">Idle</span>
+        </div>
+
+        <div id="diag">DIAG:\n</div>
+      </div>
+    </div>
+
+    <!-- Right: Webcam + overlay + live emotion chips -->
+    <div class="panel" style="flex:1 1 360px;">
+      <div id="camWrap">
+        <video id="video" autoplay muted playsinline></video>
+        <canvas id="overlay"></canvas>
+        <div id="chipMain"   class="chip">😐 Neutral</div>
+        <div id="chipSubtle" class="chip">Subtle: —</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <button id="recal">Re-calibrate (neutral)</button>
+        <button id="perf">Performance: High</button>
+        <div class="muted" id="fps"></div>
+      </div>
+    </div>
   </div>
 
-  <!-- Use ES module import so FilesetResolver/FaceLandmarker are defined -->
+  <!-- MediaPipe (ES Module) -->
   <script type="module">
     import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.11";
 
-    // ======= CONFIG =======
-    const MODEL_ASSET_URL =
-      "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"; // pinned model
-    const WASM_ROOT =
-      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.11/wasm"; // match version
-
+    // ====== CONFIG ======
+    const MODEL_ASSET_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+    const WASM_ROOT       = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.11/wasm";
+    const SAMPLE_MS = 250; // sampling rate during ad
     let highPerf = true;
 
-    // Emojis (macro + nuance)
-    const EMOJI = {
-      Neutral:'😐', Happy:'😃', Sad:'😢', Angry:'😠', Fearful:'😨', Disgusted:'🤢', Surprised:'😮',
-      Amused:'😄', Attentive:'👀', Skeptical:'🤨', Determined:'😤', Concerned:'😟', Relaxed:'🙂'
+    // ====== DOM ======
+    const $ = id => document.getElementById(id);
+    const ad = $('ad'), adUrl = $('adUrl');
+    const video = $('video'), canvas = $('overlay'), ctx = canvas.getContext('2d');
+    const chipMain = $('chipMain'), chipSubtle = $('chipSubtle');
+    const statusEl = $('status'), fpsEl = $('fps'), diagEl = $('diag');
+
+    const btnStart = $('btnStart'), btnPlay = $('btnPlay');
+    const btnCSV = $('btnCSV'), btnJSON = $('btnJSON'), btnReport = $('btnReport');
+    const logoRangeEl = $('logoRange'), ctaRangeEl = $('ctaRange'), packRangeEl = $('packRange');
+
+    // ====== Utils ======
+    const EMOJI_MAP = {
+      Surprised:'😮', Amused:'😄', Angry:'😠', Sad:'😢', Fearful:'😨',
+      Skeptical:'🤨', Determined:'😤', Concerned:'😟', Relaxed:'🙂', Neutral:'😐'
     };
+    const log = (...a)=>{ statusEl.textContent=a.join(' '); };
+    const diag = (...a)=>{ const s=a.join(' '); console.log('[diag]',s); diagEl.textContent += s + '\\n'; diagEl.scrollTop = diagEl.scrollHeight; };
 
-    const video = document.getElementById('video');
-    const canvas = document.getElementById('overlay');
-    const ctx = canvas.getContext('2d');
-    const statusEl = document.getElementById('status');
-    const fpsEl = document.getElementById('fps');
-    const chipMain = document.getElementById('chipMain');
-    const chipSubtle = document.getElementById('chipSubtle');
-    const btnRecal = document.getElementById('recal');
-    const btnPerf = document.getElementById('perf');
+    function parseTime(t){
+      if(!t) return null;
+      if(/^\d+(\.\d+)?$/.test(t)) return parseFloat(t);
+      const m=t.match(/^(\d{1,2}):(\d{2})(?:\.(\d+))?$/);
+      if(!m) return null;
+      const mm=+m[1], ss=+m[2], f=m[3]?parseFloat('0.'+m[3]):0; return mm*60+ss+f;
+    }
+    function parseRange(r){
+      if(!r) return null; const m=r.split('-'); if(m.length!==2) return null;
+      const s=parseTime(m[0].trim()), e=parseTime(m[1].trim());
+      if(isNaN(s)||isNaN(e)||e<=s) return null; return {start:s,end:e};
+    }
 
+    // ====== MediaPipe state ======
+    let faceLandmarker;
+    let calibrated=false;
     const base = {
       browInnerUp:0, browDown:0, outerBrowUp:0,
       eyesOpen:0, squint:0,
       smile:0, frown:0, lipPress:0, lipCornerDown:0,
       cheekRaise:0, jawOpen:0
     };
-    let calibrated = false;
 
-    function showErr(m){ statusEl.textContent = m; statusEl.style.color = '#ff8a8a'; }
-
-    // ======= MediaPipe init =======
-    let faceLandmarker; let lastVideoTime = -1;
-
-    async function initMediapipe(){
-      const vision = await FilesetResolver.forVisionTasks(WASM_ROOT);
-      faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
-        baseOptions: { modelAssetPath: MODEL_ASSET_URL },
-        runningMode: "VIDEO",
-        numFaces: 1,
-        outputFaceBlendshapes: true,
-        outputFacialTransformationMatrixes: false
-      });
-    }
-
-    async function startCamera(){
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode:'user',
-          width:{ ideal:1280 }, height:{ ideal:720 },
-          frameRate: highPerf ? { ideal:60, max:120 } : { ideal:30, max:30 }
-        }, audio:false
-      });
-      video.srcObject = stream;
-      await new Promise(res => { if (video.readyState >= 2) res(); else video.onloadedmetadata = () => res(); });
-      try { await video.play(); } catch(_) {}
-      resizeCanvas();
-    }
-
-    function resizeCanvas(){
-      const w = video.videoWidth || 640, h = video.videoHeight || 480;
-      canvas.width = w; canvas.height = h;
-    }
-    window.addEventListener('resize', resizeCanvas);
-    video.addEventListener('loadeddata', resizeCanvas);
-
-    // ======= Helpers =======
+    // ====== Emotion fusion (same as your working build) ======
     function toMap(blendshapes){
-      const m = {};
-      if (!blendshapes?.categories) return m;
-      for (const c of blendshapes.categories) m[c.categoryName] = c.score;
-      return m;
+      const m={}; if(!blendshapes?.categories) return m;
+      for(const c of blendshapes.categories) m[c.categoryName]=c.score; return m;
     }
     function cuesFromBlend(m){
       const browInnerUp = m["browInnerUp"]||0;
       const browOuterUp = ((m["browOuterUpLeft"]||0)+(m["browOuterUpRight"]||0))/2;
       const browDown    = ((m["browDownLeft"]||0)+(m["browDownRight"]||0))/2;
-
       const eyesWide    = ((m["eyeWideLeft"]||0)+(m["eyeWideRight"]||0))/2;
       const eyeSquint   = ((m["eyeSquintLeft"]||0)+(m["eyeSquintRight"]||0))/2;
       const eyeBlink    = ((m["eyeBlinkLeft"]||0)+(m["eyeBlinkRight"]||0))/2;
-
       const smile       = ((m["mouthSmileLeft"]||0)+(m["mouthSmileRight"]||0))/2;
       const frown       = ((m["mouthFrownLeft"]||0)+(m["mouthFrownRight"]||0))/2;
       const lipPress    = (m["mouthPressLeft"]||0) + (m["mouthPressRight"]||0);
       const lipCornerDown = frown;
       const jawOpen     = m["jawOpen"]||0;
       const cheekRaise  = ((m["cheekPuff"]||0)+(m["cheekSquintLeft"]||0)+(m["cheekSquintRight"]||0))/3;
-
-      const eyesOpen = Math.max(0, eyesWide - eyeBlink + (1 - eyeSquint) * 0.2);
-      return { browInnerUp, browOuterUp, browDown, eyesOpen, eyeSquint, smile, frown, lipPress, lipCornerDown, jawOpen, cheekRaise };
+      const eyesOpen    = Math.max(0, eyesWide - eyeBlink + (1 - eyeSquint) * 0.2);
+      return { browInnerUp,browOuterUp,browDown,eyesOpen,eyeSquint,smile,frown,lipPress,lipCornerDown,jawOpen,cheekRaise };
     }
-
-    async function calibrate(){
-      statusEl.textContent = 'Calibrating… relax face for 2s';
-      const t0 = performance.now();
-      const acc = {}; let n = 0;
-
-      while (performance.now() - t0 < 2000){
-        const res = faceLandmarker.detectForVideo(video, performance.now());
-        if (res?.faceBlendshapes?.length){
-          const m = toMap(res.faceBlendshapes[0]);
-          const c = cuesFromBlend(m);
-          for (const [k,v] of Object.entries(c)){ acc[k] = (acc[k]||0) + v; }
-          n++;
-        }
-        await new Promise(r=>requestAnimationFrame(r));
-      }
-      if (n){
-        for (const k of Object.keys(base)) if (acc[k] !== undefined) base[k] = acc[k]/n;
-        calibrated = true;
-        statusEl.textContent = 'Calibrated. Tracking…';
-      } else {
-        showErr('Calibration failed — ensure your face is visible and try again.');
-      }
-    }
-
     function fusedLabel(c){
       const d = {
         browUp:   (c.browInnerUp + c.browOuterUp) - (base.browInnerUp + base.outerBrowUp),
@@ -179,7 +165,6 @@
         jawOpen:   (c.jawOpen - base.jawOpen),
         cheek:     (c.cheekRaise - base.cheekRaise)
       };
-
       const s = {
         Surprised:  2.2*Math.max(0,d.browUp) + 1.8*Math.max(0,d.eyesOpen) + 1.2*Math.max(0,d.jawOpen),
         Amused:     2.4*Math.max(0,d.smile)  + 1.4*Math.max(0,-d.squint) + 0.8*Math.max(0,d.cheek),
@@ -191,15 +176,13 @@
         Concerned:  1.4*Math.max(0,d.cornerDown) + 0.6*Math.max(0,d.browUp),
         Relaxed:    0.8*Math.max(0, (base.squint - c.eyeSquint)) + 0.6*Math.max(0, (base.lipPress - c.lipPress))
       };
-
       let best='Neutral', bestVal=0;
       for (const [k,v] of Object.entries(s)) if (v > bestVal){ best=k; bestVal=v; }
       if (bestVal < 0.18) return 'Neutral';
       return best;
     }
-
     function subtleText(c){
-      const cues = [];
+      const cues=[];
       if ((c.browInnerUp + c.browOuterUp) - (base.browInnerUp + base.outerBrowUp) > 0.12) cues.push('Brow ↑');
       if (c.browDown - base.browDown > 0.10) cues.push('Brow ↓');
       if (c.eyesOpen - base.eyesOpen > 0.15) cues.push('Eyes ↑');
@@ -210,67 +193,270 @@
       if (c.jawOpen - base.jawOpen > 0.10) cues.push('Jaw open');
       return cues;
     }
-
     function drawLandmarks(landmarks){
       ctx.clearRect(0,0,canvas.width,canvas.height);
       if (!landmarks?.length) return;
-      ctx.lineWidth = 2; ctx.fillStyle = "rgba(0,200,255,.9)";
+      ctx.fillStyle = "rgba(0,200,255,.9)";
       for (const p of landmarks[0]) {
         ctx.beginPath();
         ctx.arc(p.x*canvas.width, p.y*canvas.height, 1.6, 0, Math.PI*2);
         ctx.fill();
       }
     }
-
-    async function init(){
-      try{
-        statusEl.textContent = 'Loading model…';
-        await initMediapipe();
-        statusEl.textContent = 'Starting camera…';
-        await startCamera();
-
-        // Warmup + calibration
-        faceLandmarker.detectForVideo(video, performance.now());
-        await calibrate();
-
-        let frames = 0, mark = performance.now();
-        function loop(){
-          const now = performance.now();
-          const res = faceLandmarker.detectForVideo(video, now);
-
-          drawLandmarks(res?.faceLandmarks);
-          if (res?.faceBlendshapes?.length){
-            const m = toMap(res.faceBlendshapes[0]);
-            const c = cuesFromBlend(m);
-            const label = fusedLabel(c);
-            const EMOJI_MAP = {
-              Surprised:'😮', Amused:'😄', Angry:'😠', Sad:'😢', Fearful:'😨',
-              Skeptical:'🤨', Determined:'😤', Concerned:'😟', Relaxed:'🙂', Neutral:'😐'
-            };
-            chipMain.textContent = `${EMOJI_MAP[label] || '🙂'} ${label}`;
-            const cues = subtleText(c);
-            if (cues.length){ chipSubtle.style.display='block'; chipSubtle.textContent = 'Subtle: ' + cues.join(', '); }
-            else { chipSubtle.style.display='none'; }
-            statusEl.textContent = 'Tracking…';
-          } else {
-            chipSubtle.style.display='none';
-            statusEl.textContent = 'Face detected';
-          }
-
-          // FPS
-          frames++; if (now - mark > 1000){ fpsEl.textContent = frames + ' fps'; frames=0; mark=now; }
-          requestAnimationFrame(loop);
-        }
-        loop();
-      }catch(err){
-        showErr('Init error: ' + (err.message || err));
-      }
+    function safeVideoReady(){
+      return video && !video.paused && !video.ended && (video.videoWidth|0)>0 && (video.videoHeight|0)>0;
     }
 
-    btnRecal.onclick = calibrate;
-    btnPerf.onclick = () => { highPerf = !highPerf; btnPerf.textContent='Performance: ' + (highPerf?'High':'Normal'); location.reload(); };
+    // ====== Init & camera/model load ======
+    let loopRAF=null, framesTick=0, framesDet=0, lastVideoTime=-1;
+    async function waitForDimensions(maxMs=5000){
+      return new Promise((resolve,reject)=>{
+        const t0=performance.now();
+        const tick=()=>{
+          const w=video.videoWidth|0, h=video.videoHeight|0;
+          if(w>0 && h>0) return resolve();
+          if(performance.now()-t0>maxMs) return reject(new Error('video dimensions still 0'));
+          requestAnimationFrame(tick);
+        }; tick();
+      });
+    }
 
-    init();
+    async function initCameraAndModel(){
+      // camera
+      diag('Camera: requesting…');
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode:'user', width:{ideal:1280}, height:{ideal:720},
+                 frameRate: highPerf ? {ideal:60,max:120} : {ideal:30,max:30} },
+        audio:false
+      });
+      video.srcObject=stream;
+      await video.play().catch(()=>{});
+      await waitForDimensions();
+      canvas.width=video.videoWidth||640; canvas.height=video.videoHeight||480;
+      diag('Camera OK @', video.videoWidth, 'x', video.videoHeight);
+
+      // model
+      diag('Model: loading…');
+      const vision = await FilesetResolver.forVisionTasks(WASM_ROOT);
+      faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+        baseOptions: { modelAssetPath: MODEL_ASSET_URL },
+        runningMode: "VIDEO",
+        numFaces: 1,
+        outputFaceBlendshapes: true,
+        outputFacialTransformationMatrixes: false
+      });
+      // warmup one call
+      faceLandmarker.detectForVideo(video, performance.now());
+      diag('Model OK');
+    }
+
+    async function calibrate(){
+      log('Calibrating… relax face for 2s');
+      const t0 = performance.now(); const acc={}; let n=0;
+      while (performance.now()-t0 < 2000){
+        if(!safeVideoReady()){ await new Promise(r=>requestAnimationFrame(r)); continue; }
+        const now=performance.now();
+        const res = faceLandmarker.detectForVideo(video, now);
+        if(res?.faceBlendshapes?.length){
+          const c=cuesFromBlend(toMap(res.faceBlendshapes[0]));
+          for (const [k,v] of Object.entries(c)){ acc[k]=(acc[k]||0)+v; }
+          n++;
+        }
+        await new Promise(r=>requestAnimationFrame(r));
+      }
+      if(n){ for(const k of Object.keys(base)) if(acc[k]!==undefined) base[k]=acc[k]/n; calibrated=true; log('Calibrated.'); }
+      else { log('Calibration failed — face not stable/visible'); }
+    }
+
+    function startLiveLoop(){
+      if(loopRAF) cancelAnimationFrame(loopRAF);
+      let frames=0, mark=performance.now();
+      const loop=()=>{
+        if(safeVideoReady()){
+          const vt = video.currentTime;
+          if(vt!==lastVideoTime){
+            const res = faceLandmarker.detectForVideo(video, performance.now());
+            drawLandmarks(res?.faceLandmarks);
+            if(res?.faceBlendshapes?.length){
+              framesDet++;
+              const c=cuesFromBlend(toMap(res.faceBlendshapes[0]));
+              const label=fusedLabel(c);
+              chipMain.textContent = `${EMOJI_MAP[label]||'🙂'} ${label}`;
+              const cues=subtleText(c);
+              if(cues.length){ chipSubtle.style.display='block'; chipSubtle.textContent='Subtle: '+cues.join(', '); }
+              else { chipSubtle.style.display='none'; }
+              // store last computed for ad sampler
+              lastEmotion = { label, cues:c, ts: performance.now() };
+            }else{
+              chipSubtle.style.display='none';
+            }
+            lastVideoTime = vt;
+          }
+        }
+        // fps
+        frames++; if(performance.now()-mark>1000){ fpsEl.textContent=frames+' fps'; frames=0; mark=performance.now(); }
+        loopRAF = requestAnimationFrame(loop);
+      };
+      loop();
+    }
+
+    // ====== Ad sampling & report ======
+    let adTimer=null, frames=[], lastEmotion=null;
+
+    const POS = new Set(['Amused','Surprised','Relaxed']);
+    const NEG = new Set(['Angry','Sad','Concerned','Skeptical','Determined','Fearful']);
+    function calcKPIs(rows){
+      const valid = rows.filter(r=>!!r.label);
+      const total = valid.length || 1;
+      const pos = valid.filter(r=>POS.has(r.label)).length;
+      const neg = valid.filter(r=>NEG.has(r.label)).length;
+      const aware = valid.filter(r=>r.label && r.label!=='Neutral').length;
+      const clamp=(x,a,b)=>Math.min(b,Math.max(a,x));
+      return {
+        PI:  +clamp((pos/total)*100,0,100).toFixed(1),
+        BP:  +clamp(((pos-neg)/total)*100 + 50, 0, 100).toFixed(1),
+        AWR: +clamp((aware/total)*100,0,100).toFixed(1),
+      };
+    }
+    function framesCSV(rows){
+      const header=['t','label','browInnerUp','browOuterUp','browDown','eyesOpen','eyeSquint','smile','frown','lipPress','lipCornerDown','jawOpen','cheekRaise'];
+      const lines=[header.join(',')];
+      rows.forEach(r=>{
+        const c=r.cues||{};
+        lines.push([
+          r.t.toFixed(3), r.label||'',
+          c.browInnerUp||0, c.browOuterUp||0, c.browDown||0, c.eyesOpen||0, c.eyeSquint||0,
+          c.smile||0, c.frown||0, c.lipPress||0, c.lipCornerDown||0, c.jawOpen||0, c.cheekRaise||0
+        ].map(x=> typeof x==='number'? (+x).toFixed(4): x).join(','));
+      });
+      return lines.join('\\n');
+    }
+    function statsForRange(rows, range){
+      if(!range) return null;
+      const sub = rows.filter(r=> r.t>=range.start && r.t<=range.end && r.label);
+      const total=sub.length||1;
+      const dist = sub.reduce((m,r)=> (m[r.label]=(m[r.label]||0)+1, m), {});
+      const pos=sub.filter(r=>POS.has(r.label)).length;
+      const neg=sub.filter(r=>NEG.has(r.label)).length;
+      const aware=sub.filter(r=>r.label!=='Neutral').length;
+      return {
+        frames: sub.length,
+        PI: +((pos/total)*100).toFixed(1),
+        BP: +(((pos-neg)/total)*100+50).toFixed(1),
+        AWR:+((aware/total)*100).toFixed(1),
+        dist
+      };
+    }
+    function buildReportHTML(meta, rows){
+      const kpi = calcKPIs(rows);
+      const ts = new Date(meta.ts||Date.now()).toLocaleString();
+      const logo=statsForRange(rows, parseRange(logoRangeEl.value.trim()));
+      const cta =statsForRange(rows, parseRange(ctaRangeEl.value.trim()));
+      const pack=statsForRange(rows, parseRange(packRangeEl.value.trim()));
+      const distAll = rows.filter(r=>r.label).reduce((m,r)=>(m[r.label]=(m[r.label]||0)+1,m),{});
+      const facePct = ((rows.filter(r=>r.label).length / Math.max(1, rows.length))*100).toFixed(1);
+      const kv=(k,v)=>`<div class="card"><div class="muted">${k}</div><div style="font-size:28px">${v}</div></div>`;
+      const distTable = (d)=> d? `<table style="border-collapse:collapse;margin-top:6px">
+        ${Object.entries(d).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<tr><td style="padding:4px 10px;border:1px solid #223">${EMOJI_MAP[k]||''} ${k}</td><td style="padding:4px 10px;border:1px solid #223;text-align:right">${v}</td></tr>`).join('')}
+      </table>` : '<div class="muted">No frames.</div>';
+      return `<!doctype html><html><head><meta charset="utf-8"/><title>Emotion Ad Report</title>
+      <style>body{font-family:system-ui,Arial;padding:24px;background:#0f1115;color:#e5e7eb}
+      h1,h2{color:#fff}.kpis{display:flex;gap:12px;flex-wrap:wrap}
+      .card{background:#121826;border:1px solid #1f2937;border-radius:12px;padding:12px;flex:1 1 220px;min-width:180px}
+      .muted{color:#9aa3b2}</style></head><body>
+      <h1>Emotion-Only Ad Report</h1>
+      <div class="muted">Generated: ${ts}</div>
+      <p class="muted">Ad: <code>${meta.ad||''}</code></p>
+      <div class="kpis">${kv('Purchase Intention',kpi.PI)}${kv('Brand Perception',kpi.BP)}${kv('Awareness',kpi.AWR)}${kv('Face-tracked frames', rows.filter(r=>r.label).length + ' / ' + rows.length + ' ('+facePct+'%)')}</div>
+      <h2>Overall Emotion Distribution</h2>${distTable(distAll)}
+      ${logo?`<h2>Brand Logo ${logoRangeEl.value}</h2><div class="kpis">${kv('PI',logo.PI)}${kv('BP',logo.BP)}${kv('AWR',logo.AWR)}${kv('Frames',logo.frames)}</div>${distTable(logo.dist)}`:''}
+      ${cta? `<h2>CTA ${ctaRangeEl.value}</h2><div class="kpis">${kv('PI',cta.PI)}${kv('BP',cta.BP)}${kv('AWR',cta.AWR)}${kv('Frames',cta.frames)}</div>${distTable(cta.dist)}`:''}
+      ${pack?`<h2>Packshot ${packRangeEl.value}</h2><div class="kpis">${kv('PI',pack.PI)}${kv('BP',pack.BP)}${kv('AWR',pack.AWR)}${kv('Frames',pack.frames)}</div>${distTable(pack.dist)}`:''}
+      <details><summary>Raw frames JSON</summary><pre>${JSON.stringify(rows,null,2)}</pre></details>
+      </body></html>`;
+    }
+    function download(name, text, type='text/plain'){
+      const blob=new Blob([text],{type}); const a=document.createElement('a');
+      a.href=URL.createObjectURL(blob); a.download=name; a.click(); URL.revokeObjectURL(a.href);
+    }
+
+    // ====== UI Handlers ======
+    btnStart.addEventListener('click', async ()=>{
+      btnStart.disabled=true;
+      try{
+        await initCameraAndModel();
+        await calibrate();
+        startLiveLoop();
+        btnPlay.disabled=false;
+        log('Ready — load ad & click Play');
+      }catch(err){
+        diag('Init error:', err?.message||err);
+        log('Init failed — see DIAG'); btnStart.disabled=false;
+      }
+    });
+
+    btnPlay.addEventListener('click', async ()=>{
+      if(!faceLandmarker){ log('Start camera first'); return; }
+      frames.length=0; framesTick=0; framesDet=0; lastEmotion=null;
+
+      ad.src = (adUrl.value||'').trim();
+      if(!ad.src){ log('Enter a valid ad URL'); return; }
+
+      // Try autoplay, then muted retry
+      try{ await ad.play(); }catch(e){ ad.muted=true; try{ await ad.play(); }catch{ log('Click the ad video to start, then press Play again.'); return; } }
+
+      if(adTimer) clearInterval(adTimer);
+      adTimer = setInterval(()=>{
+        const t = ad.currentTime||0;
+        let row;
+        // compute fresh sample to align with this tick, but guard
+        if(safeVideoReady()){
+          const res = faceLandmarker.detectForVideo(video, performance.now());
+          if(res?.faceBlendshapes?.length){
+            const cues=cuesFromBlend(toMap(res.faceBlendshapes[0]));
+            const label=fusedLabel(cues);
+            row = { t, label, cues };
+          }else{
+            row = { t, label:null, cues:null };
+          }
+        }else{
+          row = { t, label:null, cues:null };
+        }
+        frames.push(row);
+        framesTick++;
+      }, SAMPLE_MS);
+
+      log('Analyzing…');
+    });
+
+    ad.addEventListener('ended', ()=>{
+      if(adTimer){ clearInterval(adTimer); adTimer=null; }
+      const k=calcKPIs(frames);
+      log(`Done. PI=${k.PI} BP=${k.BP} AWR=${k.AWR}`);
+      btnCSV.disabled=false; btnJSON.disabled=false; btnReport.disabled=false;
+      diag('Frames total:', frames.length, 'with labels:', frames.filter(r=>r.label).length);
+    });
+
+    btnCSV.addEventListener('click', ()=> download(`frames_${Date.now()}.csv`, framesCSV(frames), 'text/csv'));
+    btnJSON.addEventListener('click', ()=>{
+      const k = calcKPIs(frames);
+      download(`report_${Date.now()}.json`, JSON.stringify({ meta:{ ts:Date.now(), ad:adUrl.value }, kpi:k, frames }, null, 2), 'application/json');
+    });
+    btnReport.addEventListener('click', ()=>{
+      const html = buildReportHTML({ ts:Date.now(), ad:adUrl.value }, frames);
+      download(`emotion_report_${Date.now()}.html`, html, 'text/html');
+    });
+
+    // Recal / perf (same as your working code)
+    $('recal').onclick = calibrate;
+    $('perf').onclick = () => { highPerf=!highPerf; $('perf').textContent='Performance: ' + (highPerf?'High':'Normal'); location.reload(); };
+
+    // Mirror draw
+    function drawMirrored(){
+      // handled in CSS-less way by redrawing landmarks already scaled to canvas
+      // (keeping as placeholder if you want to draw video feed into canvas later)
+    }
+
   </script>
 </body>
 </html>
