@@ -1,71 +1,199 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Emotion AI Test</title>
-  <style>
-    body { background:#111; color:#fff; font-family:monospace; }
-    video, canvas { border:1px solid #444; border-radius:8px; }
-    #diag { background:#000; padding:8px; margin-top:10px; height:200px; overflow:auto; white-space:pre-wrap; }
-  </style>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.18.0"></script>
-  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2"></script>
+<meta charset="utf-8" />
+<title>Emotion Recognition — Webcam + face-api.js (GitHub models)</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  :root { color-scheme: dark; }
+  body{background:#0f1115;color:#e5e7eb;font-family:system-ui,Arial;margin:16px}
+  .row{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start}
+  .panel{flex:1 1 560px;border:1px solid #222;border-radius:12px;padding:14px;background:#131722}
+  video,canvas{width:100%;border-radius:12px;background:#000}
+  button{padding:10px 14px;border:0;border-radius:10px;background:#2a2f3d;color:#fff;cursor:pointer}
+  button:disabled{opacity:.55;cursor:not-allowed}
+  #diag{white-space:pre-wrap;font:12px ui-monospace;max-height:260px;overflow:auto;background:#0b1020;border:1px solid #222;border-radius:10px;padding:10px;margin-top:10px}
+  .meter{display:grid;grid-template-columns:120px 1fr;gap:6px;align-items:center;margin:8px 0}
+  .bar{height:8px;background:#1b2233;border-radius:6px;position:relative;overflow:hidden;border:1px solid #263049}
+  .bar>span{position:absolute;left:0;top:0;bottom:0;width:0%;background:#4f86ff}
+  .label{color:#9aa3b2}
+  .controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px}
+</style>
+
+<!-- Minimal inline logger so we see everything -->
+<script>
+(function(){
+  const Q=[]; window.__diagReady=false; window.__diagQ=Q;
+  window.diag=function(){ const s=[...arguments].join(' '); console.log('[diag]',s);
+    if(!window.__diagReady){Q.push(s);return;}
+    const el=document.getElementById('diag'); if(el){ el.textContent+=s+'\n'; el.scrollTop=el.scrollHeight; }
+  };
+  window.addEventListener('error', e=>diag(`JS ERROR: ${e.message} @ ${e.filename}:${e.lineno}`));
+  window.addEventListener('unhandledrejection', e=>diag(`Promise REJECTION: ${e.reason?.message||e.reason}`));
+  diag('BOOT: logger alive');
+})();
+</script>
+
+<!-- Libraries -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.18.0/dist/tf.min.js"
+        onload="diag('CDN: tfjs loaded')" onerror="diag('CDN: tfjs **FAILED**')"></script>
+<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"
+        onload="diag('CDN: face-api loaded')" onerror="diag('CDN: face-api **FAILED**')"></script>
 </head>
 <body>
-  <h2>Emotion AI – Webcam Test</h2>
-  <video id="video" width="640" height="480" autoplay muted playsinline></video>
-  <canvas id="overlay" width="640" height="480"></canvas>
-  <div id="diag">DIAG:\n</div>
+<h2>Emotion Recognition (Webcam)
+  <span style="font:12px ui-monospace;color:#9aa3b2;margin-left:10px">models: GitHub /Emotion-Ai-/models</span>
+</h2>
+
+<div class="row">
+  <div class="panel" style="flex:1 1 560px;">
+    <div class="row" style="gap:12px">
+      <div style="flex:1 1 360px;min-width:320px;position:relative">
+        <video id="cam" autoplay muted playsinline></video>
+        <canvas id="overlay"></canvas>
+      </div>
+      <div style="flex:1 1 300px;min-width:280px">
+        <b>Live Emotions</b>
+        <div id="meters"></div>
+        <div class="controls">
+          <button id="btnStart">Start</button>
+          <label><input id="mirror" type="checkbox" checked> Mirror</label>
+          <span id="status" style="color:#9aa3b2">Idle</span>
+        </div>
+        <div id="diag">DIAG:\n</div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <script>
-const diagEl = document.getElementById("diag");
-function log(msg){ console.log(msg); diagEl.textContent += msg + "\n"; }
+/* ===== Make DIAG live ===== */
+window.__diagReady=true; if(Array.isArray(window.__diagQ)){ window.__diagQ.forEach(s=>diag(s)); window.__diagQ.length=0; }
 
-const video = document.getElementById("video");
-const canvas = document.getElementById("overlay");
-const ctx = canvas.getContext("2d");
-const MODEL_URL = "https://geraldsathiyasiva.github.io/Emotion-Ai-/models";
+/* ===== Constants & DOM ===== */
+const MODEL_URL = 'https://geraldsathiyasiva.github.io/Emotion-Ai-/models';
+const SAMPLE_MS = 250; // 4 Hz
+const EMOS = ['happy','sad','angry','disgusted','fearful','surprised','neutral'];
 
-async function startCam(){
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({video:true,audio:false});
-    video.srcObject = stream;
-    await video.play();
-    log("Camera started: " + video.videoWidth + "x" + video.videoHeight);
-  } catch(e){ log("Camera error: " + e.message); }
+const $ = id => document.getElementById(id);
+const cam = $('cam'), canv = $('overlay'), ctx = canv.getContext('2d',{willReadFrequently:true});
+const statusEl = $('status'), metersEl = $('meters');
+
+/* ===== Build emotion meters ===== */
+const meterMap = {};
+function buildMeters(){
+  metersEl.innerHTML = '';
+  EMOS.forEach(k=>{
+    const row = document.createElement('div'); row.className='meter';
+    const lab = document.createElement('div'); lab.className='label'; lab.textContent = k;
+    const bar = document.createElement('div'); bar.className='bar';
+    const fill = document.createElement('span'); bar.appendChild(fill);
+    row.appendChild(lab); row.appendChild(bar);
+    metersEl.appendChild(row);
+    meterMap[k] = fill;
+  });
 }
+function setMeter(k, v){ const el = meterMap[k]; if(!el) return; const pct = Math.round(Math.min(1,Math.max(0,v))*100); el.style.width = pct + '%'; }
 
-async function loadModels(){
-  log("Loading models from " + MODEL_URL);
-  await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-  await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
-  await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
-  log("Models loaded ✔");
+/* ===== Utils ===== */
+const log=(...a)=>statusEl.textContent=a.join(' ');
+function drawFrame(){
+  ctx.save(); ctx.clearRect(0,0,canv.width,canv.height);
+  if($('mirror').checked){ ctx.translate(canv.width,0); ctx.scale(-1,1); }
+  if (cam.readyState>=2) ctx.drawImage(cam,0,0,canv.width,canv.height);
+  ctx.restore();
 }
-
-async function runTest(){
-  log("Running 5s test...");
-  let t0 = Date.now();
-  let interval = setInterval(async ()=>{
-    const det = await faceapi.detectAllFaces(video,new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceExpressions();
-    ctx.clearRect(0,0,canvas.width,canvas.height);
-    if(det.length>0){
-      faceapi.draw.drawDetections(canvas,det);
-      faceapi.draw.drawFaceLandmarks(canvas,det);
-      log("Face detected. Emotions: " + JSON.stringify(det[0].expressions));
-    } else {
-      log("No face detected.");
+async function detectOnce(videoEl){
+  const tries=[
+    {inputSize:640,scoreThreshold:0.025},
+    {inputSize:512,scoreThreshold:0.025},
+    {inputSize:384,scoreThreshold:0.030},
+    {inputSize:320,scoreThreshold:0.040},
+  ];
+  for(const t of tries){
+    const res = await faceapi
+      .detectAllFaces(videoEl, new faceapi.TinyFaceDetectorOptions(t))
+      .withFaceLandmarks().withFaceExpressions();
+    if(res && res.length){
+      // return best by score
+      return res.reduce((b,c)=> c.detection.score>(b?.detection.score||0)?c:b, null);
     }
-    if(Date.now()-t0 > 5000){ clearInterval(interval); log("Test done."); }
-  },500);
+  }
+  return null;
 }
 
-(async function init(){
-  log("BOOT: inline logger alive");
-  await startCam();
-  await loadModels();
-  await runTest();
-})();
+/* ===== Start flow ===== */
+$('btnStart').addEventListener('click', async ()=>{
+  $('btnStart').disabled = true;
+  buildMeters();
+
+  // Camera (plain, with timeout + heartbeat)
+  let waited=0;
+  const hb=setInterval(()=>{ waited+=1000; diag(`…waiting for camera (${waited/1000}s)`); },1000);
+  diag('getUserMedia (plain) → {video:true,audio:false}');
+  let timer;
+  const timeout = new Promise((_,rej)=>{ timer=setTimeout(()=>rej(new Error('getUserMedia timeout (plain)')),7000); });
+  let stream;
+  try{
+    stream = await Promise.race([ navigator.mediaDevices.getUserMedia({video:true,audio:false}), timeout ]);
+  }catch(e){
+    clearInterval(hb); clearTimeout(timer);
+    diag('FATAL: camera:', e.name||'Error', '-', e.message||e);
+    $('btnStart').disabled=false; return;
+  }
+  clearInterval(hb); clearTimeout(timer);
+
+  try { cam.srcObject = stream; await cam.play(); } catch(e){ diag('video.play error:', e.message); }
+  await new Promise(r=>cam.onloadedmetadata=r);
+  canv.width = cam.videoWidth || 640; canv.height = cam.videoHeight || 480;
+  diag('Webcam OK @', cam.videoWidth, 'x', cam.videoHeight);
+  log('Webcam ready');
+
+  // Load models
+  try{
+    // prefer WebGL backend if available
+    if (faceapi?.tf?.setBackend) { try{ await faceapi.tf.setBackend('webgl'); await faceapi.tf.ready(); }catch{} }
+    diag('TFJS backend:', faceapi.tf?.getBackend ? faceapi.tf.getBackend() : 'n/a');
+
+    // quick probe to make DIAG explicit
+    const probe = `${MODEL_URL}/tiny_face_detector_model-weights_manifest.json?cb=${Date.now()}`;
+    try{ const r = await fetch(probe,{cache:'no-store'}); diag('PROBE', probe, '→', r.status); }catch(err){ diag('PROBE ERR', err.message); }
+
+    log('Loading models…');
+    await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+    await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+    await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
+    diag('MODELS: OK ✔ tinyFace + landmarks68 + expressions');
+  }catch(e){
+    diag('Model load ERROR:', e.message||e);
+    $('btnStart').disabled=false; return;
+  }
+
+  // Sampling loop
+  log('Analyzing… (press Start again to re-init if needed)');
+  const loop = setInterval(async ()=>{
+    drawFrame();
+    let det=null; try{ det=await detectOnce(cam); }catch(e){ diag('detectOnce error:', e.message); }
+    if(det){
+      const resized = faceapi.resizeResults([det], { width: canv.width, height: canv.height });
+      faceapi.draw.drawDetections(canv, resized);
+      faceapi.draw.drawFaceLandmarks(canv, resized);
+
+      const e = det.expressions || {};
+      EMOS.forEach(k => setMeter(k, +e[k] || 0));
+      diag(`✓ score=${det.detection.score.toFixed(3)} ` +
+           EMOS.map(k=>`${k}=${(+e[k]||0).toFixed(2)}`).join(' '));
+    }else{
+      EMOS.forEach(k => setMeter(k, 0));
+      diag('× no face detected');
+    }
+  }, SAMPLE_MS);
+
+  // Optional: stop loop if tab hidden for a long time (saves CPU)
+  document.addEventListener('visibilitychange', ()=>{
+    if (document.hidden) { diag('Tab hidden — pausing'); clearInterval(loop); }
+  }, { once:true });
+});
 </script>
 </body>
 </html>
